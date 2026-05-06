@@ -4,9 +4,11 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
-    "start": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
+    "start": "expo start 2>&1 | tee /tmp/metro.log",
+    "android": "expo run:android 2>&1 | tee /tmp/metro.log",
+    "ios": "expo run:ios 2>&1 | tee /tmp/metro.log",
+    "start:raw": "expo start",
+    "ios:raw": "expo run:ios",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },
