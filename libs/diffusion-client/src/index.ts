@@ -63,3 +63,19 @@ export type {
   ResourceUri,
   ImageEnvelope,
 } from "@diffusecraft/mcp-tools";
+
+/**
+ * Generated tool methods (FR-11 / FR-12, design.md §3 + §5, C.1).
+ * `TypedToolMethods` is the mapped type one-method-per-catalog-tool; the
+ * `DiffuseCraftClient.tools` field (Phase B.6) holds an instance built
+ * by `createToolMethods(transport)`. Hand-written wrappers (C.2) plug in
+ * via the `wrappers` argument; client-side Zod validation (C.3), typed
+ * server errors (C.4), and `AbortSignal` cascading (C.5) layer on top.
+ */
+export { createToolMethods, toCamelCase } from "./tools/index.js";
+export type {
+  CamelCase,
+  TypedToolMethods,
+  ToolCallOptions,
+  ToolMethodWrappers,
+} from "./tools/index.js";

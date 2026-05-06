@@ -30,7 +30,9 @@
 
 ## Phase C — Tool method generation
 
-- [ ] **C.1** Build script: read catalog manifest, emit `tools/generated.ts` with one method per tool. **(M)**
+- [x] **C.1** Build script: read catalog manifest, emit `tools/generated.ts` with one method per tool. **(M)**
+
+> **Implementation Note (C.1):** Implemented via Approach A (runtime iteration over `catalog.tools`) rather than static codegen. The `TypedToolMethods` mapped type provides identical compile-time guarantees per FR-12; static codegen can replace this later without breaking the public surface. Wrappers hook is `createToolMethods(transport, wrappers?)`.
 - [ ] **C.2** Hand-written wrappers for tools needing special handling (`upload_blob` integrates image helper). **(S)**
 - [ ] **C.3** Client-side Zod validation before send. Throws `ClientValidationError` with field path. **(S)**
 - [ ] **C.4** Server error parsing: typed `ServerError` thrown on 4xx/5xx and MCP error responses. **(S)**
