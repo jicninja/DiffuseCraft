@@ -277,13 +277,22 @@ export function createLayerSurfaceRegistry(
     const existing = records.get(layerId);
     if (existing !== undefined) return existing;
 
-    const surface = Skia.Surface.MakeOffscreen(width, height);
+    // Use a CPU-backed raster surface for the persistent layer pixels.
+    // GPU-backed `MakeOffscreen` (Metal-backed via `WrapBackendTexture` on
+    // iOS) gave snapshots whose pixel reads on the visible canvas raced with
+    // pending GPU work — strokes committed (logs showed seq incrementing)
+    // but the resulting snapshot rendered as empty. CPU raster gives
+    // synchronous pixel state: the snapshot contains exactly what was just
+    // drawn, with no flush/submit timing concerns. The trade-off is a
+    // per-frame CPU→GPU upload for display, which is acceptable because the
+    // SharedValue only changes once per stroke commit (not per stamp).
+    const surface = Skia.Surface.Make(width, height);
     if (surface === null) {
       // Allocation failure — the caller is responsible for cancelling the
       // stroke (see Error Handling § in design.md).
       // eslint-disable-next-line no-console
       console.warn(
-        `[LayerSurfaceRegistry] MakeOffscreen returned null`,
+        `[LayerSurfaceRegistry] Surface.Make returned null`,
         { layerId, width, height },
       );
       return null;
@@ -450,13 +459,15 @@ export function createLayerSurfaceRegistry(
       }
       const canvas = rec.surface.getCanvas();
       // Bake the stroke image onto the layer using the stroke's blend mode.
-      // saveLayer ensures DstOut / Plus / SrcOver are applied against the
-      // layer's existing pixels rather than the destination clip behind it.
+      // Pass the paint directly to drawImage — its blendMode is applied to
+      // the draw. The previous saveLayer/restore wrapper introduced an
+      // offscreen layer that, on iOS Simulator GPU surfaces, did not always
+      // composite back before the subsequent makeImageSnapshot, causing the
+      // snapshotted layer to appear empty (the user-visible "stroke
+      // disappears on release" symptom).
       const paint = Skia.Paint();
       paint.setBlendMode(blendMode);
-      canvas.saveLayer(paint);
-      canvas.drawImage(strokeImage, 0, 0);
-      canvas.restore();
+      canvas.drawImage(strokeImage, 0, 0, paint);
       const disposablePaint = paint as unknown as { dispose?: () => void };
       disposablePaint.dispose?.();
 
