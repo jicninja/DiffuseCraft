@@ -58,6 +58,19 @@
  *     so callers can attach a handler at construction time and not have
  *     to retro-attach when Phase I lands.
  *
+ *   - **Error translation (FR-14): NOT performed by this transport.**
+ *     Unlike `stdio.ts` and `http.ts` — which translate MCP wire errors
+ *     via `transports/_errors.ts` (`wrapServerError` for thrown
+ *     `McpError`s, `serverErrorFromIsErrorResult` for the SDK's
+ *     `isError: true` tool-result path) — the in-memory transport has
+ *     no wire-framing layer. `server.mcp.invokeTool` is a direct
+ *     in-process function call that throws domain errors verbatim
+ *     (e.g. `ServerError`, `ValidationError`, `ConnectionError` from
+ *     `errors.ts`), so the transport forwards them unchanged. The
+ *     translation step is unnecessary because the server is the source
+ *     of those typed errors — there is nothing to "wrap" back into the
+ *     same shape.
+ *
  * Typing strategy: the constructor accepts `unknown` and narrows
  * structurally on first use. `import type` from `@diffusecraft/server`
  * is intentionally avoided so the dependency direction stays one-way

@@ -93,7 +93,12 @@ import type {
   ToolOutput,
 } from "@diffusecraft/mcp-tools";
 
-import { ConnectionError, ServerError } from "../errors.js";
+import { ConnectionError } from "../errors.js";
+import {
+  isErrorToolResult,
+  serverErrorFromIsErrorResult,
+  wrapServerError,
+} from "./_errors.js";
 import { appendResourceQuery } from "./_query.js";
 import type {
   HandshakeResult,
@@ -336,7 +341,13 @@ export class StdioTransport implements Transport {
 
   /**
    * Invoke a catalog tool. Wraps `client.callTool({ name, arguments })`
-   * and converts {@link McpError} responses to {@link ServerError}.
+   * and translates BOTH MCP error paths to {@link ServerError} (FR-14):
+   * (1) thrown {@link McpError} responses are wrapped via
+   * `wrapServerError`, and (2) the SDK's tool-result `isError: true`
+   * path (the SDK does NOT throw on tool-level failures — it returns
+   * `CallToolResult` with `isError: true` for the consumer to inspect)
+   * is translated via `serverErrorFromIsErrorResult` so callers never
+   * have to inspect the result by hand.
    *
    * The MCP SDK's `callTool` has its own `RequestOptions.timeout`; we
    * pass `opts.timeout_ms` through verbatim. Pre-aborted signals throw
@@ -355,8 +366,9 @@ export class StdioTransport implements Transport {
     }
     const client = this.requireClient();
 
+    let result: unknown;
     try {
-      const result = await client.callTool(
+      result = await client.callTool(
         {
           name: toolName,
           // The MCP SDK types `arguments` as `Record<string, unknown> |
@@ -367,16 +379,29 @@ export class StdioTransport implements Transport {
         undefined,
         opts?.timeout_ms !== undefined ? { timeout: opts.timeout_ms } : undefined,
       );
-      // The catalog's `ToolOutput<N>` is the post-Zod-validation shape;
-      // the MCP SDK returns the wire payload (with `content` /
-      // `structuredContent` wrappers). Phase C.4 introduces the
-      // server-output unwrap layer; for now we cast through `unknown`
-      // so the transport surface stays type-correct and the unwrap
-      // happens above us.
-      return result as unknown as ToolOutput<N>;
     } catch (err) {
-      throw this.wrapMcpError(err, toolName);
+      throw wrapServerError(err, "stdio", toolName);
     }
+
+    // FR-14: typed `ServerError` thrown on MCP error responses. The MCP
+    // SDK's `Client.callTool` does NOT throw on tool-level failures —
+    // it returns the `CallToolResult` with `isError: true` for the
+    // consumer to inspect. We translate that into a thrown
+    // `ServerError` here so SDK callers never have to inspect the
+    // result by hand (defeating the typed-return-shape goal of
+    // FR-12). Verified at
+    // `node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js`
+    // lines 490-520.
+    if (isErrorToolResult(result)) {
+      throw serverErrorFromIsErrorResult(result, "stdio", toolName);
+    }
+
+    // The catalog's `ToolOutput<N>` is the post-Zod-validation shape;
+    // the MCP SDK returns the wire payload (with `content` /
+    // `structuredContent` wrappers). The server-output unwrap layer
+    // lives above the transport boundary; here we keep the cast
+    // through `unknown` so the surface stays type-correct.
+    return result as ToolOutput<N>;
   }
 
   /**
@@ -399,7 +424,7 @@ export class StdioTransport implements Transport {
       const result = await client.readResource({ uri: finalUri });
       return result;
     } catch (err) {
-      throw this.wrapMcpError(err, undefined);
+      throw wrapServerError(err, "stdio", undefined);
     }
   }
 
@@ -546,27 +571,6 @@ export class StdioTransport implements Transport {
     });
   }
 
-  /**
-   * Convert an SDK-thrown error into the SDK's typed
-   * {@link ServerError}. Rethrows non-MCP errors verbatim so the caller
-   * sees the original (e.g. transport-level Node errors keep their
-   * stack).
-   */
-  private wrapMcpError(err: unknown, toolName: string | undefined): unknown {
-    if (err instanceof McpError) {
-      return new ServerError(
-        toolName !== undefined
-          ? `stdio transport: tool '${toolName}' failed: ${err.message}`
-          : `stdio transport: ${err.message}`,
-        {
-          mcp_error_code: err.code,
-          details: err.data,
-          cause: err,
-        },
-      );
-    }
-    return err;
-  }
 }
 
 /**

@@ -102,7 +102,12 @@ import type {
 } from "@diffusecraft/mcp-tools";
 
 import type { TokenProvider } from "../config.js";
-import { ConnectionError, ServerError } from "../errors.js";
+import { ConnectionError } from "../errors.js";
+import {
+  isErrorToolResult,
+  serverErrorFromIsErrorResult,
+  wrapServerError,
+} from "./_errors.js";
 import { appendResourceQuery } from "./_query.js";
 import {
   RECONNECT_FAILED_CAUSE,
@@ -572,7 +577,15 @@ export class HttpTransport implements Transport {
 
   /**
    * Invoke a catalog tool. Wraps `client.callTool({ name, arguments })`
-   * and converts {@link McpError} responses to {@link ServerError}.
+   * and translates BOTH MCP error paths to {@link ServerError} (FR-14):
+   * (1) thrown {@link McpError} responses are wrapped via
+   * `wrapServerError`, and (2) the SDK's tool-result `isError: true`
+   * path (the SDK does NOT throw on tool-level failures — it returns
+   * `CallToolResult` with `isError: true` for the consumer to inspect)
+   * is translated via `serverErrorFromIsErrorResult` so callers never
+   * have to inspect the result by hand. Translation happens inside
+   * {@link dispatchSend} so reconnect-time replays use the same code
+   * path.
    *
    * The MCP SDK's `callTool` accepts a `RequestOptions.timeout`; we
    * honour `opts.timeout_ms` first and fall back to
@@ -654,7 +667,7 @@ export class HttpTransport implements Transport {
       const result = await client.readResource({ uri: finalUri });
       return result;
     } catch (err) {
-      throw this.wrapMcpError(err, undefined);
+      throw wrapServerError(err, "http", undefined);
     }
   }
 
@@ -827,28 +840,6 @@ export class HttpTransport implements Transport {
     });
   }
 
-  /**
-   * Convert an SDK-thrown error into the SDK's typed
-   * {@link ServerError}. Rethrows non-MCP errors verbatim so the caller
-   * sees the original (e.g. transport-level network errors keep their
-   * stack).
-   */
-  private wrapMcpError(err: unknown, toolName: string | undefined): unknown {
-    if (err instanceof McpError) {
-      return new ServerError(
-        toolName !== undefined
-          ? `http transport: tool '${toolName}' failed: ${err.message}`
-          : `http transport: ${err.message}`,
-        {
-          mcp_error_code: err.code,
-          details: err.data,
-          cause: err,
-        },
-      );
-    }
-    return err;
-  }
-
   // -------------------------------------------------------------------
   // Reconnect orchestration
   // -------------------------------------------------------------------
@@ -936,6 +927,16 @@ export class HttpTransport implements Transport {
             return;
           }
           this.pendingSends.delete(id);
+          // FR-14: typed `ServerError` thrown on MCP error responses.
+          // The MCP SDK's `Client.callTool` does NOT throw on tool-
+          // level errors — it returns the `CallToolResult` with
+          // `isError: true` for the consumer to inspect. Translate
+          // that into a thrown `ServerError` here so SDK callers
+          // never have to inspect the result by hand.
+          if (isErrorToolResult(result)) {
+            outerReject(serverErrorFromIsErrorResult(result, "http", toolName));
+            return;
+          }
           outerResolve(result as unknown as ToolOutput<N>);
         },
         (err) => {
@@ -953,7 +954,7 @@ export class HttpTransport implements Transport {
             return;
           }
           this.pendingSends.delete(id);
-          outerReject(this.wrapMcpError(err, toolName));
+          outerReject(wrapServerError(err, "http", toolName));
         },
       );
 
