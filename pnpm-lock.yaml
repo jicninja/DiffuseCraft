@@ -236,6 +236,19 @@ importers:
         version: 5.9.3
 
   libs/diffusion-client:
+    dependencies:
+      '@diffusecraft/core':
+        specifier: workspace:*
+        version: link:../core
+      '@diffusecraft/mcp-tools':
+        specifier: workspace:*
+        version: link:../mcp-tools
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.0.4
+        version: 1.29.0(zod@3.25.76)
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
     devDependencies:
       typescript:
         specifier: ^5.5.4

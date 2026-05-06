@@ -10,7 +10,7 @@
 
 ## Phase A — Scaffolding & types
 
-- [ ] **A.1** Initialize `libs/diffusion-client/` Nx project. Tags: `scope:client-sdk`. Deps: `@diffusecraft/core`, `@diffusecraft/mcp-tools`, `@modelcontextprotocol/sdk`, `zod`. **(S)**
+- [x] **A.1** Initialize `libs/diffusion-client/` Nx project. Tags: `scope:client-sdk`. Deps: `@diffusecraft/core`, `@diffusecraft/mcp-tools`, `@modelcontextprotocol/sdk`, `zod`. **(S)**
 - [ ] **A.2** `ClientConfig` Zod schema with all fields from `requirements.md` §3.2. **(S)**
 - [ ] **A.3** Error classes: `ClientValidationError`, `ServerError`, `RequestTimeoutError`, `ConnectionError`, `PairingRejectedError`, `SamplingNotSupportedError`. **(S)**
 - [ ] **A.4** Type re-exports from `@diffusecraft/mcp-tools` (`ToolName`, `ToolInput<T>`, `ToolOutput<T>`, `EventName`, `EventPayload<E>`, `ResourceUri`). **(S)**

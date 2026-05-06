@@ -11,6 +11,14 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@diffusecraft/core": "workspace:*",
+    "@diffusecraft/mcp-tools": "workspace:*",
+    "zod": "^3.23.0"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
   "devDependencies": {
     "typescript": "^5.5.4"
   }
