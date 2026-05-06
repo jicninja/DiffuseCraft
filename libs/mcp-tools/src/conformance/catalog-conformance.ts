@@ -141,7 +141,7 @@ export const runConformance = (
     // Export
     "export_image",
   ];
-  const presentNames = new Set(catalog.tools.map((t) => t.name));
+  const presentNames = new Set<string>(catalog.tools.map((t) => t.name));
   for (const required of requiredTools) {
     if (!presentNames.has(required)) {
       failures.push({
@@ -170,7 +170,7 @@ export const runConformance = (
     "diffusecraft://redo-stack/{document-id}",
     "diffusecraft://blob/{id}",
   ];
-  const resourceUris = new Set(catalog.resources.map((r) => r.uri));
+  const resourceUris = new Set<string>(catalog.resources.map((r) => r.uri));
   for (const uri of requiredResources) {
     if (!resourceUris.has(uri)) {
       failures.push({
@@ -187,7 +187,7 @@ export const runConformance = (
     "model.download.progress",
     "audit.entry",
   ];
-  const eventNames = new Set(catalog.events.map((e) => e.name));
+  const eventNames = new Set<string>(catalog.events.map((e) => e.name));
   for (const name of requiredEvents) {
     if (!eventNames.has(name)) {
       failures.push({

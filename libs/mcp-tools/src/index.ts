@@ -12,6 +12,7 @@
 export * from "./shared";
 export * from "./version";
 export * from "./manifest";
+export * from "./types";
 // Per-tool re-exports so server-side handler registrations can import the
 // canonical `ToolDefinition` instances by name.
 export * from "./tools/server";

@@ -16,9 +16,10 @@ export type ToolCategory = "read" | "write" | "job";
 export interface ToolDefinition<
   I extends z.ZodTypeAny = z.ZodTypeAny,
   O extends z.ZodTypeAny = z.ZodTypeAny,
+  N extends string = string,
 > {
   /** snake_case verb_noun. Stable contract surface. */
-  name: string;
+  name: N;
   /** Short human-readable label. */
   title: string;
   /**
@@ -53,17 +54,31 @@ export interface ToolDefinition<
 /**
  * Identity-typed factory: keeps the I/O generics on the inferred type so
  * downstream code can `typeof generateImage` and pull the schemas back out.
+ *
+ * The `N` generic captures the literal `name` so `catalog.tools` retains
+ * a discriminated union over `name` (consumed by `ToolName` / `ToolInput` /
+ * `ToolOutput` aliases re-exported via `types.ts`).
  */
-export const defineTool = <I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  def: ToolDefinition<I, O>,
-): ToolDefinition<I, O> => def;
+export const defineTool = <
+  I extends z.ZodTypeAny,
+  O extends z.ZodTypeAny,
+  N extends string,
+>(
+  def: ToolDefinition<I, O, N>,
+): ToolDefinition<I, O, N> => def;
 
 /**
  * Resource definition. URIs may include `{id}` segments treated as path
  * params at resolution time.
+ *
+ * The `U` generic captures the literal URI so `catalog.resources` retains
+ * a discriminated union over `uri` (consumed by `ResourceUri` re-export).
  */
-export interface ResourceDefinition<C extends z.ZodTypeAny = z.ZodTypeAny> {
-  uri: string;
+export interface ResourceDefinition<
+  C extends z.ZodTypeAny = z.ZodTypeAny,
+  U extends string = string,
+> {
+  uri: U;
   title: string;
   description: string;
   contentSchema: C;
@@ -74,22 +89,31 @@ export interface ResourceDefinition<C extends z.ZodTypeAny = z.ZodTypeAny> {
   supports_fields: boolean;
 }
 
-export const defineResource = <C extends z.ZodTypeAny>(
-  def: ResourceDefinition<C>,
-): ResourceDefinition<C> => def;
+export const defineResource = <C extends z.ZodTypeAny, U extends string>(
+  def: ResourceDefinition<C, U>,
+): ResourceDefinition<C, U> => def;
 
-/** Event definition. */
-export interface EventDefinition<P extends z.ZodTypeAny = z.ZodTypeAny> {
+/**
+ * Event definition.
+ *
+ * The `N` generic captures the literal `name` so `catalog.events` retains
+ * a discriminated union over `name` (consumed by `EventName` /
+ * `EventPayload<E>` aliases).
+ */
+export interface EventDefinition<
+  P extends z.ZodTypeAny = z.ZodTypeAny,
+  N extends string = string,
+> {
   /** Event name in `noun.past-tense` form (e.g., `job.completed`). */
-  name: string;
+  name: N;
   description: string;
   payloadSchema: P;
   since: string;
 }
 
-export const defineEvent = <P extends z.ZodTypeAny>(
-  def: EventDefinition<P>,
-): EventDefinition<P> => def;
+export const defineEvent = <P extends z.ZodTypeAny, N extends string>(
+  def: EventDefinition<P, N>,
+): EventDefinition<P, N> => def;
 
 /** MCP prompt (templated agent guidance, FR-43). */
 export interface PromptArgument {
@@ -122,4 +146,36 @@ export interface CatalogDefinition {
   prompts: ReadonlyArray<PromptDefinition>;
 }
 
-export const defineCatalog = (def: CatalogDefinition): CatalogDefinition => def;
+/**
+ * Generic shape for the manifest literal. Generic parameters preserve the
+ * narrowed `ToolDefinition` / `ResourceDefinition` / `EventDefinition`
+ * subtypes (with literal `name` / `uri`) so consumers can derive
+ * discriminated unions (`ToolName`, `ResourceUri`, `EventName`, etc.)
+ * from `typeof catalog`.
+ */
+export interface NarrowedCatalogDefinition<
+  Tools extends ReadonlyArray<ToolDefinition>,
+  Resources extends ReadonlyArray<ResourceDefinition>,
+  Events extends ReadonlyArray<EventDefinition>,
+  Prompts extends ReadonlyArray<PromptDefinition>,
+> {
+  version: string;
+  tools: Tools;
+  resources: Resources;
+  events: Events;
+  prompts: Prompts;
+}
+
+/**
+ * Identity-typed factory that preserves the precise tuple types of the
+ * input arrays, so the resulting `catalog` object keeps literal `name` /
+ * `uri` discriminants on each entry. The runtime body is unchanged.
+ */
+export const defineCatalog = <
+  const Tools extends ReadonlyArray<ToolDefinition>,
+  const Resources extends ReadonlyArray<ResourceDefinition>,
+  const Events extends ReadonlyArray<EventDefinition>,
+  const Prompts extends ReadonlyArray<PromptDefinition>,
+>(
+  def: NarrowedCatalogDefinition<Tools, Resources, Events, Prompts>,
+): NarrowedCatalogDefinition<Tools, Resources, Events, Prompts> => def;
