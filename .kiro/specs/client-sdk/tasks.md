@@ -23,8 +23,10 @@
 
 > **Implementation Note (B.2):** `subscribe()` currently throws `ConnectionError` on stdio because `libs/server` publishes domain events to its in-process `EventBus` only — there is no MCP wire-notification publication path on stdio or HTTP transports today. Upstream fix belongs in `server-architecture` (or wherever MCP-side notification publishing is owned). When the server emits `notifications/<eventName>`, swap stdio's `subscribe()` to `client.setNotificationHandler(...)` keyed on the event name.
 - [x] **B.3** HTTP transport: integrate `@modelcontextprotocol/sdk/client/streamableHttp`; bearer token in headers; long-lived event channel. **(L)**
-- [ ] **B.4** HTTP reconnector with exponential backoff. Replays in-flight requests; resubscribes events; re-issues handshake. **(M)**
-- [ ] **B.5** Transport tests: each transport round-trips a `get_server_info` against a mock server. **(M)**
+- [x] **B.4** HTTP reconnector with exponential backoff. Replays in-flight requests; resubscribes events; re-issues handshake. **(M)**
+- [x]* **B.5** Transport tests: each transport round-trips a `get_server_info` against a mock server. **(M)**
+
+> **Deferred per `.kiro/steering/testing.md`:** automated tests are archived in `.kiro/tests-backup/` until end of v1. Re-enable B.5 when tests resume.
 
 ## Phase C — Tool method generation
 

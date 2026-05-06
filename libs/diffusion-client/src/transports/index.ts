@@ -40,3 +40,13 @@ export type { StdioTransportConfig } from "./stdio.js";
  */
 export { HttpTransport, createHttpTransport } from "./http.js";
 export type { HttpTransportConfig } from "./http.js";
+
+/**
+ * Reconnect orchestration (FR-29 / FR-30 / FR-31, B.4). Public surface
+ * exposes the policy type and the status enum so Phase B.6's
+ * `DiffuseCraftClient.events.onConnectionStatus(...)` and the
+ * `getStatus()` projection can speak the same vocabulary as the
+ * transport-level emitter.
+ */
+export { Reconnector, RECONNECT_FAILED_CAUSE } from "./reconnect.js";
+export type { ReconnectConfig, ReconnectStatus, ReconnectorParams, ReconnectOutcome } from "./reconnect.js";

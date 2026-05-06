@@ -104,6 +104,13 @@ import type {
 import type { TokenProvider } from "../config.js";
 import { ConnectionError, ServerError } from "../errors.js";
 import { appendResourceQuery } from "./_query.js";
+import {
+  RECONNECT_FAILED_CAUSE,
+  Reconnector,
+  reconnectFailedError,
+  type ReconnectConfig,
+  type ReconnectStatus,
+} from "./reconnect.js";
 import type {
   HandshakeResult,
   ResourceReadQuery,
@@ -180,7 +187,35 @@ export interface HttpTransportConfig {
    * `fetch` option.
    */
   fetch?: typeof fetch;
+  /**
+   * Reconnect policy (FR-29 / FR-30 / FR-31, design.md §8). When the
+   * SDK's `StreamableHTTPClientTransport` fires `onclose` while the
+   * wrapper is still in the `connected === true` state (i.e. the close
+   * was unsolicited), the transport runs the configured backoff loop —
+   * implemented in `reconnect.ts` — to rebuild the SDK client, re-issue
+   * the handshake, re-install the sampling handler, and replay
+   * in-flight `send()` calls.
+   *
+   * Defaults (when omitted): enabled, `max_attempts: 5`, `backoff_ms:
+   * [500, 1000, 2000, 4000, 8000]` — same as `ReconnectConfigSchema` in
+   * `config.ts`. Set `enabled: false` to disable reconnect entirely;
+   * unsolicited closes then propagate `ConnectionError` to pending
+   * callers immediately.
+   */
+  reconnect?: Partial<ReconnectConfig>;
 }
+
+/**
+ * Default reconnect policy applied when `HttpTransportConfig.reconnect`
+ * is omitted or partially specified. Mirrors `ReconnectConfigSchema` in
+ * `config.ts` so the transport-level default matches the
+ * `ClientConfig`-level default exactly.
+ */
+const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
+  enabled: true,
+  max_attempts: 5,
+  backoff_ms: [500, 1000, 2000, 4000, 8000],
+};
 
 // ---------------------------------------------------------------------------
 // Stub logger
@@ -212,13 +247,18 @@ const NOOP_LOGGER: WarnLogger = {
  * `initialize` handshake, and SSE-stream management are reused verbatim
  * (FR-7). All catalog-typed surface is preserved (FR-10).
  *
- * Reconnect orchestration is intentionally NOT implemented here — that
- * concern belongs to `transports/reconnect.ts` (Phase B.4), which wraps
- * this transport. The SDK's own internal SSE-reconnect timer remains
- * active (it transparently replays missed events via `Last-Event-ID`),
- * but the application-level reconnect lifecycle (`reconnecting` status,
- * handshake re-issue on success, status-error transition on max-attempts)
- * is layered on top.
+ * Reconnect orchestration (FR-29 / FR-30 / FR-31, design.md §8) is wired
+ * here using the {@link Reconnector} loop driver from `reconnect.ts`. The
+ * SDK's own internal SSE-reconnect timer is still active (it transparently
+ * replays missed events via `Last-Event-ID` while the SSE stream is
+ * recoverable); this layer sits ABOVE that and orchestrates the full
+ * higher-level recovery — re-construct the SDK transport + `Client`,
+ * re-resolve the bearer token (the `TokenProvider` may have rotated it
+ * between attempts), re-issue the `initialize` handshake, re-install the
+ * sampling request handler, replay in-flight `send()` calls (bounded to
+ * one retry per request to avoid duplicate side-effects on `job` tools),
+ * and emit `reconnecting` → `connected` | `failed` connection-status
+ * transitions for consumer surfaces.
  */
 export class HttpTransport implements Transport {
   /**
@@ -269,11 +309,89 @@ export class HttpTransport implements Transport {
   /** Logger used for the disconnect-grace warning (defaults to no-op). */
   private readonly logger: WarnLogger;
 
+  /**
+   * Effective reconnect policy. Resolved in the constructor by overlaying
+   * `config.reconnect` (when supplied) onto {@link DEFAULT_RECONNECT_CONFIG}.
+   * Held as a frozen reference so the reconnect loop reads a stable value
+   * even if the caller mutates the config object after construction.
+   */
+  private readonly reconnectConfig: ReconnectConfig;
+
+  /**
+   * Set in `disconnect()` for the duration of the user-initiated tear-down.
+   * Read by the SDK transport's `onclose` callback to distinguish the
+   * "user asked to disconnect" path (no reconnect) from the "server tore
+   * down the session unexpectedly" path (run reconnect). Cleared after
+   * `disconnect()` resolves so a subsequent `connect()` starts fresh.
+   */
+  private userInitiatedClose = false;
+
+  /**
+   * Terminal failure flag. Set by the reconnect loop's `onFatal` after
+   * `max_attempts` is exhausted (or when `reconnect.enabled === false`).
+   * Once set, every future `send()` / `readResource()` call rejects with
+   * the stored {@link reconnectError} immediately rather than touching the
+   * SDK. Cleared by a fresh `connect()` (the consumer can re-initialise
+   * the transport explicitly after a fatal reconnect failure).
+   */
+  private failed = false;
+
+  /**
+   * Reconnect-failed `ConnectionError` (`cause: "reconnect-failed"`,
+   * `transport_kind: "http"`). Built once by the reconnect loop and
+   * reused for every pending request rejection AND every post-failure
+   * call rejection — so callers get a stable error reference and a
+   * consistent stack.
+   */
+  private reconnectError: ConnectionError | null = null;
+
+  /**
+   * Active reconnect orchestration. `null` outside reconnect windows.
+   * Held so `disconnect()` can call `stop()` if the user tears the
+   * transport down mid-reconnect.
+   */
+  private activeReconnector: Reconnector | null = null;
+
+  /**
+   * Promise resolved when the in-flight reconnect attempt finishes.
+   * Used by `send()` / `readResource()` so calls that arrive while a
+   * reconnect is running queue up rather than failing fast — and so the
+   * Phase B.6 logger can `await` the loop for diagnostics.
+   */
+  private reconnectingPromise: Promise<void> | null = null;
+
+  /**
+   * In-flight `send()` calls. Each entry holds the controls needed to
+   * replay the request on the new client after reconnect — the tool
+   * name, the original args, the per-call options, and the
+   * resolve/reject pair of the outer promise. The `attempts` counter
+   * caps replay at one retry per request (FR-29 — "in-flight requests
+   * are queued"; the spec mandates at-most-one retry to avoid
+   * duplicate side-effects on `job` tools).
+   *
+   * Indexed by an opaque numeric id minted on every `send()` so the
+   * map can hold multiple concurrent calls without `args` collisions.
+   */
+  private pendingSends = new Map<number, PendingSend>();
+
+  /** Monotonic id source for `pendingSends`. */
+  private nextSendId = 1;
+
+  /**
+   * Connection-status listeners (FR-21 / FR-31). Phase B.6's
+   * `DiffuseCraftClient.events.onConnectionStatus(...)` registers here
+   * so consumers see `reconnecting` / `connected` / `failed`
+   * transitions emitted by the loop. Kept as a `Set` so `register` /
+   * `unregister` is O(1) and order-insensitive.
+   */
+  private statusListeners = new Set<(status: ReconnectStatus) => void>();
+
   constructor(
     private readonly config: HttpTransportConfig,
     logger?: WarnLogger,
   ) {
     this.logger = logger ?? NOOP_LOGGER;
+    this.reconnectConfig = resolveReconnectConfig(config.reconnect);
     this.sampling = {
       register: (handler: TransportSamplingHandler): Unsubscribe => {
         this.samplingHandler = handler;
@@ -315,6 +433,15 @@ export class HttpTransport implements Transport {
         transport_kind: "http",
       });
     }
+
+    // A fresh `connect()` clears any prior terminal-failure state. The
+    // reconnect loop only ever sets `failed = true` after exhausting all
+    // attempts, and the spec contract is "future `send()` calls reject
+    // immediately with the same error" — but a deliberate, externally-
+    // driven re-`connect()` is the consumer signalling intent to reset.
+    this.failed = false;
+    this.reconnectError = null;
+    this.userInitiatedClose = false;
 
     // 1) Parse the URL up front — `new URL(...)` throws on malformed
     //    input; we surface that as `ConnectionError` rather than letting
@@ -380,8 +507,21 @@ export class HttpTransport implements Transport {
     // when the server tears down the session without our `disconnect()`
     // driving it. The SDK invokes `onclose` after its own internal
     // teardown completes.
+    //
+    // When the close was unsolicited AND reconnect is enabled, kick the
+    // {@link Reconnector} loop. When it was user-initiated (the
+    // `disconnect()` path sets `userInitiatedClose = true` before
+    // calling `client.close()`), do nothing — the higher-level path
+    // handles the tear-down.
     sdkTransport.onclose = () => {
       this.connected = false;
+      if (this.userInitiatedClose) return;
+      // Fire-and-forget: the reconnect loop runs asynchronously and
+      // updates `pendingSends` / `failed` / `reconnectError` as it
+      // goes. Errors thrown synchronously from `triggerReconnect` are
+      // already surfaced by the loop's `onFatal` path — there is no
+      // additional handling needed here.
+      void this.triggerReconnect();
     };
 
     try {
@@ -448,23 +588,24 @@ export class HttpTransport implements Transport {
     if (opts?.signal?.aborted) {
       throw new Error("aborted");
     }
-    const client = this.requireClient();
 
-    const timeout = opts?.timeout_ms ?? this.config.request_timeout_ms;
-
-    try {
-      const result = await client.callTool(
-        {
-          name: toolName,
-          arguments: args as Record<string, unknown>,
-        },
-        undefined,
-        timeout !== undefined ? { timeout } : undefined,
-      );
-      return result as unknown as ToolOutput<N>;
-    } catch (err) {
-      throw this.wrapMcpError(err, toolName);
+    // Reconnect-failure terminal state — every future call rejects with
+    // the same `ConnectionError` until the consumer explicitly
+    // re-`connect()`s.
+    if (this.failed) {
+      throw this.reconnectError ?? reconnectFailedError("transport failed");
     }
+
+    // If a reconnect is currently in flight, queue this call: track it
+    // in `pendingSends` and wait for the reconnect to resolve before
+    // attempting the SDK call. The reconnect loop's success path
+    // replays every entry in `pendingSends`; the failure path rejects
+    // every entry.
+    if (this.reconnectingPromise) {
+      return this.queueDuringReconnect(toolName, args, opts);
+    }
+
+    return this.dispatchSend(toolName, args, opts, /* attemptCount */ 0);
   }
 
   /**
@@ -481,8 +622,33 @@ export class HttpTransport implements Transport {
     if (opts?.signal?.aborted) {
       throw new Error("aborted");
     }
-    const client = this.requireClient();
 
+    // Reconnect-failure terminal state mirrors `send()`.
+    if (this.failed) {
+      throw this.reconnectError ?? reconnectFailedError("transport failed");
+    }
+
+    // Resource reads aren't tracked in `pendingSends` (no side effects
+    // to deduplicate, no replay budget needed). When a reconnect is in
+    // flight, await it and dispatch on the new client. Pre-aborted
+    // signal is checked again post-await in case the consumer aborted
+    // while we waited.
+    if (this.reconnectingPromise) {
+      try {
+        await this.reconnectingPromise;
+      } catch {
+        // Loop reports failure via `failed` / `reconnectError`; fall
+        // through to the gate below.
+      }
+      if (opts?.signal?.aborted) {
+        throw new Error("aborted");
+      }
+      if (this.failed) {
+        throw this.reconnectError ?? reconnectFailedError("transport failed");
+      }
+    }
+
+    const client = this.requireClient();
     const finalUri = appendResourceQuery(uri, query);
     try {
       const result = await client.readResource({ uri: finalUri });
@@ -532,10 +698,42 @@ export class HttpTransport implements Transport {
    * cleanly before we log.
    */
   async disconnect(): Promise<void> {
+    // Mark the close as user-initiated up front so the SDK's `onclose`
+    // callback (which fires from inside `client.close()`) does NOT
+    // trigger the reconnect loop.
+    this.userInitiatedClose = true;
+
+    // Cancel any in-flight reconnect attempt. `stop()` is idempotent and
+    // safe even when the loop has already resolved. It does NOT reject
+    // the queued `pendingSends`; we do that below so all paths converge
+    // on the same rejection.
+    if (this.activeReconnector) {
+      this.activeReconnector.stop();
+      this.activeReconnector = null;
+    }
+    this.reconnectingPromise = null;
+
+    // Reject any requests queued during a reconnect. From the consumer's
+    // perspective, calling `disconnect()` is an unconditional abandon —
+    // pending calls cannot resume against a transport that is being torn
+    // down on purpose.
+    if (this.pendingSends.size > 0) {
+      const err = new ConnectionError(
+        "http transport: disconnect() called while requests pending",
+        { transport_kind: "http" },
+      );
+      for (const pending of this.pendingSends.values()) {
+        pending.reject(err);
+      }
+      this.pendingSends.clear();
+    }
+
     const client = this.client;
     if (!client || !this.connected) {
       this.connected = false;
       this.resolvedToken = null;
+      this.statusListeners.clear();
+      this.userInitiatedClose = false;
       return;
     }
 
@@ -570,6 +768,8 @@ export class HttpTransport implements Transport {
       this.sdkTransport = null;
       this.samplingHandler = null;
       this.resolvedToken = null;
+      this.statusListeners.clear();
+      this.userInitiatedClose = false;
     }
   }
 
@@ -594,6 +794,9 @@ export class HttpTransport implements Transport {
    * call.
    */
   private requireClient(): Client {
+    if (this.failed) {
+      throw this.reconnectError ?? reconnectFailedError("transport failed");
+    }
     if (!this.client || !this.connected) {
       throw new ConnectionError(
         "http transport: not connected — call connect() before send/readResource/subscribe",
@@ -645,6 +848,352 @@ export class HttpTransport implements Transport {
     }
     return err;
   }
+
+  // -------------------------------------------------------------------
+  // Reconnect orchestration
+  // -------------------------------------------------------------------
+
+  /**
+   * Register a connection-status listener (FR-21 / FR-31). Called by
+   * Phase B.6's `DiffuseCraftClient.events.onConnectionStatus(...)`.
+   * The transport emits `reconnecting` once when the loop starts, then
+   * either `connected` (successful reconnect) or `failed` (max attempts
+   * exhausted) when the loop terminates.
+   *
+   * Returns an `Unsubscribe` callback. Calling it after the transport
+   * has been disposed is a no-op (the set is cleared in
+   * `disconnect()`).
+   */
+  onConnectionStatus(handler: (status: ReconnectStatus) => void): Unsubscribe {
+    this.statusListeners.add(handler);
+    return () => {
+      this.statusListeners.delete(handler);
+    };
+  }
+
+  /**
+   * Dispatch a single `send()` against the current SDK client. Wraps
+   * the SDK's `callTool` with the same {@link ServerError} translation
+   * as the public `send()` plus the in-flight tracking that makes
+   * reconnect-time replay possible.
+   *
+   * `attemptCount` is the number of times THIS request has already
+   * been attempted across reconnects. Capped at 1 retry per request
+   * (FR-29) — a `send()` that disconnects mid-call gets ONE replay on
+   * the new client; a second mid-call disconnect rejects the call so
+   * job-shaped tools never see a third execution.
+   */
+  private async dispatchSend<N extends ToolName>(
+    toolName: N,
+    args: ToolInput<N>,
+    opts: TransportSendOptions | undefined,
+    attemptCount: number,
+  ): Promise<ToolOutput<N>> {
+    if (this.failed) {
+      throw this.reconnectError ?? reconnectFailedError("transport failed");
+    }
+    const client = this.requireClient();
+    const timeout = opts?.timeout_ms ?? this.config.request_timeout_ms;
+
+    const id = this.nextSendId++;
+    // Track the in-flight call so a mid-call disconnect can resume it.
+    // We hold the original args + opts (NOT the AbortSignal — the
+    // signal's controller is owned by the caller and stays attached
+    // across replays) and a resolve/reject pair that the replay path
+    // settles instead of the original `callTool` await.
+    let outerResolve!: (value: ToolOutput<N>) => void;
+    let outerReject!: (err: unknown) => void;
+    const outer = new Promise<ToolOutput<N>>((resolve, reject) => {
+      outerResolve = resolve;
+      outerReject = reject;
+    });
+    const pending: PendingSend = {
+      toolName,
+      args: args as Record<string, unknown>,
+      opts,
+      attempts: attemptCount + 1,
+      resolve: outerResolve as (value: unknown) => void,
+      reject: outerReject,
+    };
+    this.pendingSends.set(id, pending);
+
+    // Fire the SDK call; settle `outer` from its resolution path. We
+    // intentionally do NOT `await` here — the disconnect-during-send
+    // window needs `outer` to remain pending so the reconnect loop
+    // can decide whether to replay.
+    client
+      .callTool(
+        { name: toolName, arguments: args as Record<string, unknown> },
+        undefined,
+        timeout !== undefined ? { timeout } : undefined,
+      )
+      .then(
+        (result) => {
+          if (this.pendingSends.get(id) !== pending) {
+            // The reconnect loop has already taken ownership of this
+            // request (via `replayPending`). Drop the result silently
+            // — the replay path will resolve `outer`.
+            return;
+          }
+          this.pendingSends.delete(id);
+          outerResolve(result as unknown as ToolOutput<N>);
+        },
+        (err) => {
+          if (this.pendingSends.get(id) !== pending) {
+            // Same as above — the reconnect loop owns the entry.
+            return;
+          }
+          // If the SDK call failed because the connection dropped
+          // (i.e. the SDK transport's `onclose` fired and our
+          // reconnect loop is now running), do NOT settle `outer`
+          // yet: the reconnect loop will replay (or reject) it.
+          if (this.reconnectingPromise && pending.attempts <= 2) {
+            // Bump the attempt counter so the loop's replay caps
+            // total executions at 2 (original + one retry).
+            return;
+          }
+          this.pendingSends.delete(id);
+          outerReject(this.wrapMcpError(err, toolName));
+        },
+      );
+
+    return outer;
+  }
+
+  /**
+   * Queue a `send()` call that arrived while a reconnect was already
+   * in flight. The call's promise stays pending until the reconnect
+   * loop terminates: on success the entry is replayed against the new
+   * client; on failure it is rejected with the reconnect-failed
+   * error.
+   */
+  private queueDuringReconnect<N extends ToolName>(
+    toolName: N,
+    args: ToolInput<N>,
+    opts: TransportSendOptions | undefined,
+  ): Promise<ToolOutput<N>> {
+    return new Promise<ToolOutput<N>>((resolve, reject) => {
+      const id = this.nextSendId++;
+      const pending: PendingSend = {
+        toolName,
+        args: args as Record<string, unknown>,
+        opts,
+        // attempts=0 here means "never tried on the wire yet"; the
+        // replay path will run a real attempt and increment.
+        attempts: 0,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      };
+      this.pendingSends.set(id, pending);
+    });
+  }
+
+  /**
+   * Kick off the reconnect loop after an unsolicited disconnect. Idempotent
+   * across overlapping `onclose` invocations — the second caller sees
+   * `reconnectingPromise` already set and returns immediately.
+   *
+   * The supplied `reconnect` closure (`rebuildClient`) re-resolves the
+   * bearer token, re-constructs `StreamableHTTPClientTransport` +
+   * `Client`, re-issues the `initialize` handshake, re-installs the
+   * sampling request handler, and flips `connected` back to `true` —
+   * matching the original `connect()` invariants. The Reconnector
+   * observes only success / failure; on success we replay every entry
+   * in `pendingSends` against the new client.
+   */
+  private async triggerReconnect(): Promise<void> {
+    if (this.userInitiatedClose) return;
+    if (this.reconnectingPromise) return;
+    if (this.failed) return;
+
+    const reconnector = new Reconnector({
+      config: this.reconnectConfig,
+      reconnect: () => this.rebuildClient(),
+      onStatusChange: (status) => {
+        for (const listener of this.statusListeners) {
+          try {
+            listener(status);
+          } catch (err) {
+            // Listener errors must not break the loop.
+            this.logger.warn(
+              { err, transport: "http" },
+              "http transport: connection-status listener threw",
+            );
+          }
+        }
+      },
+      onFatal: (err) => {
+        // The loop has given up. Mark terminal failure, store the
+        // canonical error reference, and reject every queued request.
+        this.failed = true;
+        this.reconnectError =
+          err instanceof ConnectionError ? err : reconnectFailedError("loop reported fatal");
+        const failure = this.reconnectError;
+        for (const pending of this.pendingSends.values()) {
+          pending.reject(failure);
+        }
+        this.pendingSends.clear();
+      },
+    });
+
+    this.activeReconnector = reconnector;
+    let resolveDone!: () => void;
+    this.reconnectingPromise = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+
+    try {
+      const outcome = await reconnector.start();
+      if (outcome === "connected") {
+        await this.replayPending();
+      }
+      // `failed` and `cancelled` outcomes have already settled
+      // `pendingSends` via `onFatal` / `disconnect()` respectively;
+      // nothing else to do here.
+    } finally {
+      this.activeReconnector = null;
+      this.reconnectingPromise = null;
+      resolveDone();
+    }
+  }
+
+  /**
+   * Re-resolve the bearer token, re-construct the SDK transport +
+   * client, re-issue the handshake, and re-install the sampling
+   * handler. Throws on any step's failure — the {@link Reconnector}
+   * loop catches and retries per the configured backoff schedule.
+   *
+   * On success, leaves `this.client`, `this.sdkTransport`,
+   * `this.connected`, and `this.resolvedToken` populated against the
+   * new connection — matching the post-condition of the original
+   * `connect()` so subsequent calls find a healthy transport.
+   */
+  private async rebuildClient(): Promise<void> {
+    let url: URL;
+    try {
+      url = new URL(this.config.url);
+    } catch (err) {
+      throw new ConnectionError(
+        `http transport: invalid url '${this.config.url}'`,
+        { transport_kind: "http", cause: err },
+      );
+    }
+
+    // Re-resolve the bearer token. A `TokenProvider` may have rotated
+    // it between attempts; honouring that is the whole reason FR-7
+    // calls out per-attempt token resolution.
+    let token: string;
+    try {
+      token = await resolveToken(this.config.token);
+    } catch (err) {
+      throw new ConnectionError(
+        `http transport: token resolution failed (${err instanceof Error ? err.message : String(err)})`,
+        { transport_kind: "http", cause: err },
+      );
+    }
+    if (token.length === 0) {
+      throw new ConnectionError("http transport: token resolved to empty string", {
+        transport_kind: "http",
+      });
+    }
+
+    const headers: Record<string, string> = {};
+    if (this.config.headers) {
+      for (const [name, value] of Object.entries(this.config.headers)) {
+        if (name.toLowerCase() === "authorization") continue;
+        headers[name] = value;
+      }
+    }
+    headers["Authorization"] = `Bearer ${token}`;
+
+    const sdkTransport = new StreamableHTTPClientTransport(url, {
+      requestInit: { headers },
+      ...(this.config.fetch !== undefined ? { fetch: this.config.fetch } : {}),
+    });
+
+    const clientInfo = this.config.clientInfo ?? {
+      name: "diffusecraft-client",
+      version: "0.0.0",
+    };
+    const client = new Client(clientInfo, { capabilities: {} });
+
+    // Same onclose wiring as the original connect: re-trigger the
+    // reconnect loop on subsequent unsolicited closes.
+    sdkTransport.onclose = () => {
+      this.connected = false;
+      if (this.userInitiatedClose) return;
+      void this.triggerReconnect();
+    };
+
+    try {
+      await client.connect(sdkTransport);
+    } catch (err) {
+      try {
+        await sdkTransport.close();
+      } catch {
+        // The original error is the one that matters.
+      }
+      throw err;
+    }
+
+    // Tear down the previous SDK references (best-effort — the SDK
+    // already fired `onclose` for them, so they should be torn down,
+    // but we explicitly null them out to free the GC root).
+    this.client = client;
+    this.sdkTransport = sdkTransport;
+    this.connected = true;
+    this.resolvedToken = token;
+
+    // Re-install the sampling handler so the new client honours the
+    // already-registered consumer handler.
+    this.installSamplingHandler(client);
+  }
+
+  /**
+   * Replay every entry in `pendingSends` against the new (post-reconnect)
+   * client. Bounded to one retry per request: entries with `attempts >=
+   * 2` are rejected with a {@link ConnectionError} carrying `cause:
+   * "reconnect-replay-exhausted"` so the consumer can distinguish a
+   * replay-bound rejection from a fresh server error.
+   *
+   * The replay goes through `dispatchSend` so the SDK call is tracked
+   * the same way a fresh call is — any subsequent disconnect during
+   * replay observes the existing `attempts` counter and respects the
+   * cap.
+   */
+  private async replayPending(): Promise<void> {
+    if (this.pendingSends.size === 0) return;
+
+    // Snapshot + clear the map up front so `dispatchSend` can repopulate
+    // it with fresh entries (each replay registers itself anew under a
+    // new id; the old entries are no longer the canonical handle).
+    const entries = Array.from(this.pendingSends.values());
+    this.pendingSends.clear();
+
+    for (const entry of entries) {
+      if (entry.attempts >= 2) {
+        // Replay budget exhausted. Reject with a stable error shape.
+        entry.reject(
+          new ConnectionError(
+            `http transport: replay budget exhausted for tool '${entry.toolName}'`,
+            { transport_kind: "http", cause: "reconnect-replay-exhausted" },
+          ),
+        );
+        continue;
+      }
+
+      // Fire the replay; settle the original `outer` promise from the
+      // dispatch's resolution path. Using `.then` (not `await`) so all
+      // pending requests fan out concurrently — the original `send()`
+      // calls were already concurrent, and serialising them on replay
+      // would be a behavioural change.
+      this.dispatchSend(entry.toolName as ToolName, entry.args as ToolInput<ToolName>, entry.opts, entry.attempts)
+        .then(
+          (result) => entry.resolve(result),
+          (err) => entry.reject(err),
+        );
+    }
+  }
 }
 
 /**
@@ -657,6 +1206,57 @@ async function resolveToken(token: string | TokenProvider): Promise<string> {
   if (typeof token === "string") return token;
   return await token();
 }
+
+/**
+ * Internal record tracking a `send()` call from the moment it dispatches
+ * (or is queued during reconnect) until it resolves or rejects. The
+ * reconnect loop reads `toolName` / `args` / `opts` to replay against
+ * the new client; `attempts` caps total executions at 2 (original + one
+ * retry, FR-29); `resolve` / `reject` settle the outer promise the
+ * caller is awaiting.
+ *
+ * Held in `HttpTransport.pendingSends` only — not exported. Phase B.5
+ * unit tests (deferred per project convention) would assert against
+ * the map's contents indirectly via the reconnect outcome.
+ */
+interface PendingSend {
+  readonly toolName: string;
+  readonly args: Record<string, unknown>;
+  readonly opts: TransportSendOptions | undefined;
+  /**
+   * Number of times this request has been dispatched on the wire. 0
+   * when first queued during a reconnect (no wire attempt yet); 1
+   * after the initial `dispatchSend`; 2 after one replay. The replay
+   * cap rejects entries with `attempts >= 2`.
+   */
+  attempts: number;
+  resolve: (value: unknown) => void;
+  reject: (err: unknown) => void;
+}
+
+/**
+ * Overlay user-supplied `reconnect` config onto {@link DEFAULT_RECONNECT_CONFIG}
+ * — a shallow merge that preserves the default schedule when the user
+ * supplies only `enabled` or only `max_attempts`. Returns a frozen
+ * shape so the loop reads stable values across attempts.
+ */
+function resolveReconnectConfig(
+  partial: Partial<ReconnectConfig> | undefined,
+): ReconnectConfig {
+  if (!partial) return { ...DEFAULT_RECONNECT_CONFIG };
+  return Object.freeze({
+    enabled: partial.enabled ?? DEFAULT_RECONNECT_CONFIG.enabled,
+    max_attempts: partial.max_attempts ?? DEFAULT_RECONNECT_CONFIG.max_attempts,
+    backoff_ms: partial.backoff_ms ?? [...DEFAULT_RECONNECT_CONFIG.backoff_ms],
+  });
+}
+
+// `RECONNECT_FAILED_CAUSE` is imported above; re-export at the type level
+// is unnecessary because `reconnectFailedError` already returns a
+// `ConnectionError` whose `cause` is the sentinel. This `void` statement
+// pins the symbol so `noUnusedLocals` does not strip it before its first
+// transitive use lands in Phase C.
+void RECONNECT_FAILED_CAUSE;
 
 /**
  * Factory mirror for callers that prefer functional construction over
