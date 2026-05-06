@@ -34,6 +34,8 @@
 
 > **Implementation Note (C.1):** Implemented via Approach A (runtime iteration over `catalog.tools`) rather than static codegen. The `TypedToolMethods` mapped type provides identical compile-time guarantees per FR-12; static codegen can replace this later without breaking the public surface. Wrappers hook is `createToolMethods(transport, wrappers?)`.
 - [ ] **C.2** Hand-written wrappers for tools needing special handling (`upload_blob` integrates image helper). **(S)**
+
+> **Deferred until Phase H:** C.1's `createToolMethods(transport, wrappers?)` already exposes the wrapper hook. The only known special-case in v1 is `upload_blob`, which needs the image helpers (H.1/H.2) to exist first. Re-enter C.2 after H.2 lands.
 - [ ] **C.3** Client-side Zod validation before send. Throws `ClientValidationError` with field path. **(S)**
 - [ ] **C.4** Server error parsing: typed `ServerError` thrown on 4xx/5xx and MCP error responses. **(S)**
 - [ ] **C.5** AbortSignal support per call. Pre-send abort no-op; post-send → `cancel_job` for jobs. **(M)**
