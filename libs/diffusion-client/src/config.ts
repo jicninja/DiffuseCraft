@@ -23,6 +23,7 @@
 import { z } from "zod";
 import { ClientCapabilities as ClientCapabilitiesSchema } from "@diffusecraft/mcp-tools";
 import { ClientValidationError } from "./errors.js";
+import type { MdnsAdapter as RuntimeMdnsAdapter } from "./adapters/mdns.js";
 
 // ---------------------------------------------------------------------------
 // Re-exported / declared interfaces
@@ -49,15 +50,17 @@ export interface TokenProvider {
 }
 
 /**
- * mDNS discovery adapter (design §12). Concrete implementations live in
- * consumer packages (`react-native-zeroconf` for `apps/mobile`,
- * `bonjour-service` for MeshCraft). The SDK accepts any compatible
- * implementation.
+ * mDNS discovery adapter (design §12, FR-22, F.1). The authoritative
+ * runtime contract lives in `./adapters/mdns.ts`; this re-export keeps
+ * `import { MdnsAdapter } from "@diffusecraft/diffusion-client"` (the
+ * shape consumers configure via `ClientConfig.adapters.mdns`) and the
+ * `PairingClient`-side import path pointed at the same interface.
+ *
+ * Concrete implementations live in consumer packages
+ * (`react-native-zeroconf` for `apps/mobile`, `bonjour-service` for
+ * MeshCraft); the SDK accepts any compatible implementation.
  */
-export interface MdnsAdapter {
-  scan(opts: { service: string }): AsyncIterableIterator<unknown>;
-  stop(): void;
-}
+export type MdnsAdapter = RuntimeMdnsAdapter;
 
 /**
  * Secure-token storage adapter (design §12, FR-26). The SDK provides an

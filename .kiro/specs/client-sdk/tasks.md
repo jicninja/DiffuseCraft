@@ -63,12 +63,14 @@
 
 ## Phase F — Pairing client
 
-- [ ] **F.1** `MdnsAdapter` interface. **(XS)**
-- [ ] **F.2** `discover()` async iterable using adapter. **(M)**
-- [ ] **F.3** `requestPair(backend)` POST flow + waiting for token response. **(M)**
-- [ ] **F.4** `parseQr(payload)` — Zod-validated JSON parse. **(S)**
-- [ ] **F.5** `parseManual(input)` — URL parsing with token query param. **(S)**
-- [ ] **F.6** Tests: discover with stub mDNS; requestPair against test server; QR parse with various payloads; manual parse edge cases. **(M)**
+- [x] **F.1** `MdnsAdapter` interface. **(XS)**
+- [x] **F.2** `discover()` async iterable using adapter. **(M)**
+- [x] **F.3** `requestPair(backend)` POST flow + waiting for token response. **(M)**
+- [x] **F.4** `parseQr(payload)` — Zod-validated JSON parse. **(S)**
+- [x] **F.5** `parseManual(input)` — URL parsing with token query param. **(S)**
+- [x]* **F.6** Tests: discover with stub mDNS; requestPair against test server; QR parse with various payloads; manual parse edge cases. **(M)**
+
+> **Deferred per testing.md.**
 
 ## Phase G — Adapters
 

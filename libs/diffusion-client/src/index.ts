@@ -135,3 +135,36 @@ export type {
   EventListener,
   HttpStatusSource,
 } from "./events/index.js";
+
+/**
+ * Pairing client (FR-22 / FR-23 / FR-24 / FR-25, design.md §9, F.1–F.5).
+ * `PairingClient` exposes the four entry points the tablet (and any
+ * other consumer) uses to onboard against a server: `discover()` (mDNS
+ * via the consumer-supplied {@link MdnsAdapter}), `requestPair()`
+ * (POST `/pair` + host-approval hook wait), `parseQr()` (decode the
+ * base64url QR payload), and `parseManual()` (parse the
+ * `?t=<token>` paste line). The eventual `DiffuseCraftClient.pairing`
+ * field (Phase B.6) holds an instance constructed from the consumer's
+ * adapters.
+ */
+export { PairingClient } from "./pairing/index.js";
+export type {
+  DiscoverOptions,
+  DiscoveredBackend,
+  ManualPayload,
+  PairingClientOptions,
+  PairResult,
+  QrPayload,
+  RequestPairOptions,
+} from "./pairing/index.js";
+
+/**
+ * mDNS adapter constants + auxiliary types (FR-22, design §12, F.1).
+ * The authoritative `MdnsAdapter` interface is re-exported from
+ * `config.ts` (above, via `export * from "./config"`) so consumers can
+ * spell it the same way they spell other config-side adapter types.
+ * {@link DEFAULT_MDNS_SERVICE_NAME} is the canonical service type the
+ * server advertises (`_diffusecraft._tcp.local`).
+ */
+export { DEFAULT_MDNS_SERVICE_NAME } from "./adapters/mdns.js";
+export type { MdnsScanOptions } from "./adapters/mdns.js";
