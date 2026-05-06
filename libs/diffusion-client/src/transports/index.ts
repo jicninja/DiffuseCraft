@@ -21,3 +21,12 @@ export type {
  * routing through `createDiffuseCraftClient`.
  */
 export { InMemoryTransport, createInMemoryTransport } from "./in-memory.js";
+
+/**
+ * stdio transport (FR-8 / FR-10, B.2). Public so Node-side hosts (CLI
+ * harnesses, agent integrations) can construct it directly. Browser
+ * environments must not import this — it depends on `child_process`
+ * via `@modelcontextprotocol/sdk/client/stdio`.
+ */
+export { StdioTransport, createStdioTransport } from "./stdio.js";
+export type { StdioTransportConfig } from "./stdio.js";

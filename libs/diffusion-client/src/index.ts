@@ -30,6 +30,15 @@ export type {
 export { InMemoryTransport, createInMemoryTransport } from "./transports";
 
 /**
+ * stdio transport (FR-8, B.2). Spawns a child process via
+ * `@modelcontextprotocol/sdk`'s `StdioClientTransport` and exchanges
+ * MCP framing on stdin/stdout. Node-only — must not be imported from
+ * browser environments.
+ */
+export { StdioTransport, createStdioTransport } from "./transports";
+export type { StdioTransportConfig } from "./transports";
+
+/**
  * Type re-exports from `@diffusecraft/mcp-tools` (requirements §3.1 FR-3,
  * design.md §3). Consumers can call typed SDK methods without taking a
  * direct dependency on the catalog package.
