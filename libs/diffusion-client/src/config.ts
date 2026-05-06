@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 import { ClientCapabilities as ClientCapabilitiesSchema } from "@diffusecraft/mcp-tools";
+import { ClientValidationError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Re-exported / declared interfaces
@@ -235,17 +236,20 @@ export type ClientConfig = Omit<z.infer<typeof ClientConfigSchema>, "adapters" |
 };
 
 /**
- * Parse and apply documented defaults. Throws a generic `Error` whose message
- * is prefixed `ClientConfig invalid:` when validation fails.
- *
- * NOTE: typed-error wrapping (`ClientValidationError`) is owned by task A.3.
- * Once that task lands, `parseClientConfig` will throw the typed error
- * instead. See the Status Report `CONCERNS` field for the deferred wiring.
+ * Parse and apply documented defaults. Throws `ClientValidationError`
+ * carrying the dotted `field_path` of the first offending Zod issue plus a
+ * human-readable message when validation fails (FR-13).
  */
 export function parseClientConfig(input: unknown): ClientConfig {
   const result = ClientConfigSchema.safeParse(input);
   if (!result.success) {
-    throw new Error(`ClientConfig invalid: ${result.error.message}`);
+    const issue = result.error.issues[0];
+    const fieldPath = issue?.path.length ? issue.path.map(String).join(".") : "<root>";
+    const reason = issue?.message ?? result.error.message;
+    throw new ClientValidationError(`ClientConfig invalid at ${fieldPath}: ${reason}`, {
+      field_path: fieldPath,
+      cause: result.error,
+    });
   }
   // The schema-inferred shape stores adapters/logger as `unknown`; re-cast to
   // the consumer-facing type so callers see the typed adapter interfaces.
