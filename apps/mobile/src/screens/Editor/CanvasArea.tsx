@@ -151,11 +151,11 @@ export function CanvasArea({ document }: CanvasAreaProps) {
             // and `@shopify/react-native-skia` (one nested under
             // `libs/canvas-skia/node_modules`, one at the workspace root).
             // The two copies declare nominally distinct `SharedValue<...>` and
-            // `SkPicture` types even though they are identical at runtime.
+            // `SkImage` types even though they are identical at runtime.
             // The cast crosses the package-identity gap; the runtime contract
             // is preserved by the JSI bridge.
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            activePicture={brushPipeline.activePicture as any}
+            activeStrokeImage={brushPipeline.activeStrokeImage as any}
           />
         </View>
       </GestureDetector>

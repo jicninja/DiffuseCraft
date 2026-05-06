@@ -1,39 +1,54 @@
 /**
- * StampRenderer — single-recorder, per-stroke pooled stamp renderer.
+ * StampRenderer — full-raster, per-stroke pooled stamp renderer.
+ *
+ * Architecture (Procreate-style stroke preview):
+ *
+ *     pointer move → draw stamps DIRECTLY into a transient stroke SkSurface
+ *                  → display reads `surface.makeImageSnapshot()` per frame
+ *     pointer up   → caller bakes the stroke surface onto the layer surface
+ *                  → stroke surface disposed
  *
  * Lifecycle (one instance per stroke):
  *
- *   1. `beginStroke(config)` allocates exactly one `SkPaint` and (for the
- *      stroke's hardness/color) one `SkShader`, then opens a fresh
- *      `SkPictureRecorder`.
- *   2. `drawStamps(stamps)` records each stamp into the open recorder using
- *      the pooled paint + shader. O(stamps).
- *   3. `takePicture()` finalizes the recorder (returning the resulting
- *      `SkPicture`) and *immediately* opens a new recorder so subsequent
- *      `drawStamps` calls keep accumulating into a fresh picture.
- *   4. `endStroke()` releases the paint, shader, and any open recorder.
+ *   1. `beginStroke(config)` allocates exactly one `SkPaint`, one `SkShader`,
+ *      and one transient stroke `SkSurface` sized to the stroke buffer
+ *      dimensions. The surface starts transparent.
+ *   2. `drawStamps(stamps)` paints each stamp's pixels directly into the
+ *      stroke surface. **No command list, no Picture replay.** The pixels
+ *      live on the GPU side of the surface. O(new stamps).
+ *   3. `takeImage()` returns `surface.makeImageSnapshot()` — a snapshot
+ *      `SkImage` of the current pixels. Per-frame display cost is **O(1)**:
+ *      one snapshot reference + one `<Image>` draw, regardless of how many
+ *      stamps the stroke contains. This is the core scalability win over
+ *      a Picture-based active stroke (which costs O(stamps) GPU-side per
+ *      frame to replay every drawCircle command).
+ *   4. `getSurface()` exposes the stroke surface so the commit worklet can
+ *      `drawImage(strokeSnapshot)` onto the persistent layer surface.
+ *   5. `endStroke()` disposes the paint, shader, and stroke surface.
  *      Idempotent.
  *
- * Why a single picture per stroke instead of the legacy "chunks" model:
- *   - The active stroke is short-lived (one gesture). The picture is
- *     re-recorded each frame inside a `useDerivedValue` and disposed at
- *     commit, so the Picture's command list never persists across strokes.
- *   - One `finishRecordingAsPicture` + one `beginRecording` per frame is
- *     cheaper than maintaining per-100-stamp chunks and rebuilding a wrapper
- *     picture every frame (the legacy path's cost model).
+ * Why direct-to-surface instead of Picture chunks:
+ *   `<Picture>` element on the visible canvas replays every recorded
+ *   `drawCircle` command per frame; that cost grows linearly with stroke
+ *   length. With a stroke surface, each new stamp pays its rasterization
+ *   cost ONCE (when the stamp is drawn), then every subsequent display
+ *   frame is just a single `drawImage` of the cached snapshot. Strokes of
+ *   any length cost the same per frame to display.
  *
  * Resource pooling (Req 4.1, 4.2):
- *   - One `SkPaint` per stroke. Reused for every stamp. The shader is set
- *     once at `beginStroke`; per-stamp variation is expressed through
- *     canvas transforms (translate + scale) and per-call alpha modulation.
- *   - The shader is built from `hardness-shader.ts` (kept untouched). For
- *     a single stroke with a fixed hardness/color, one shader is enough.
+ *   - One `SkPaint` per stroke. Reused for every stamp; per-stamp variation
+ *     is expressed through canvas transform + alpha modulation.
+ *   - One `SkShader` per stroke (built from `hardness-shader.ts`).
+ *   - One `SkSurface` per stroke. Sized to the working buffer dimensions
+ *     (capped at 4096² by the pipeline). RGBA bytes ≈ width × height × 4.
  *
  * Worklet semantics:
- *   - All methods are intended to be called from the worklet runtime that
- *     drives the active picture's `useDerivedValue`. They do not allocate
- *     new paints or shaders inside `drawStamps`, so the per-event budget
- *     stays bounded by the stamp count.
+ *   - All methods carry the `'worklet'` directive and are intended to be
+ *     invoked from the worklet runtime that drives the active stroke
+ *     image's `useDerivedValue`. State lives on a single mutable `state`
+ *     object (not closure `let` bindings) because Reanimated does not
+ *     preserve `let` reassignments across worklet invocations on the UI
+ *     runtime.
  *
  * Design reference: brush-canvas-rendering §StampRenderer.
  */
@@ -43,10 +58,10 @@ import {
   BlendMode,
   Skia,
   type SkCanvas,
+  type SkImage,
   type SkPaint,
-  type SkPicture,
-  type SkPictureRecorder,
   type SkShader,
+  type SkSurface,
 } from '@shopify/react-native-skia';
 
 import { buildHardnessShader } from './hardness-shader';
@@ -72,7 +87,7 @@ export interface StampRendererConfig {
 /** Public surface of the renderer. */
 export interface StampRenderer {
   /**
-   * Allocate paint + shader, open the recorder. Worklet-callable.
+   * Allocate paint + shader + transient stroke `SkSurface`. Worklet-callable.
    *
    * Calling `beginStroke` while already active disposes the prior stroke
    * first (defensive — the brush pipeline never does this in practice).
@@ -80,25 +95,32 @@ export interface StampRenderer {
   beginStroke(config: StampRendererConfig): void;
 
   /**
-   * Append `stamps` to the open recorder. Worklet-callable. O(stamps).
-   *
-   * No-op when `beginStroke` was not called or `endStroke` already ran.
+   * Paint each stamp directly onto the stroke surface. Worklet-callable.
+   * O(new stamps). No-op when the renderer is not active.
    */
   drawStamps(stamps: ReadonlyArray<Stamp>): void;
 
   /**
-   * Finalize the open recorder and return the resulting picture.
-   * Immediately opens a fresh recorder so subsequent `drawStamps` calls
-   * keep recording without losing in-flight work.
+   * Snapshot the stroke surface and return the resulting `SkImage`. The
+   * returned handle reflects the surface's pixels at this moment;
+   * subsequent draws to the surface MAY copy-on-write, but that is
+   * RN-Skia's concern. Worklet-callable. O(1).
    *
-   * Returns `null` when no stroke is active. The previous picture handle
-   * remains valid for replay until the caller releases it.
+   * Returns `null` when no stroke is active.
    */
-  takePicture(): SkPicture | null;
+  takeImage(): SkImage | null;
 
   /**
-   * Dispose the per-stroke paint, shader, and any open recorder.
-   * Idempotent — safe to call multiple times.
+   * Direct accessor for the stroke surface, used by the commit worklet to
+   * `drawImage` the stroke's pixels onto the persistent layer surface at
+   * gesture end.
+   *
+   * Returns `null` when no stroke is active.
+   */
+  getSurface(): SkSurface | null;
+
+  /**
+   * Dispose the per-stroke paint, shader, and stroke surface. Idempotent.
    */
   endStroke(): void;
 
@@ -111,23 +133,19 @@ export interface StampRenderer {
   isActive(): boolean;
 }
 
-/** Construct a fresh `StampRenderer`. The renderer owns no global state.
+/**
+ * Construct a fresh `StampRenderer`. The renderer owns no global state.
  *
- * **Why state is held in a single mutable object, not in `let` variables.**
+ * **Why state lives on a single mutable object, not in `let` bindings.**
  * Reanimated's worklet runtime serializes captured-closure variables at the
- * moment the worklet is read, but reassignments to those captured `let`
- * bindings between worklet invocations are NOT preserved across the JS↔UI
- * boundary or across separate worklet invocations on the UI runtime — each
- * `renderer.method()` call ends up reading a frozen snapshot of the bindings
- * captured when the method was first serialized. The symptom is
- * `takePicture()` always returning null at commit time because `active`
- * appears `false` even though `beginStroke` set it to `true`.
- *
- * Plain object MEMBER mutations DO survive across worklet invocations because
- * Reanimated tracks the object reference (this is the same pattern the
- * `IncrementalStampExpander` already uses). All renderer state therefore
- * lives on a single `state` object and the methods mutate `state.X` rather
- * than rebinding closure `let`s.
+ * moment a worklet is first read; subsequent reassignments to those captured
+ * `let` bindings between worklet invocations are NOT preserved across the
+ * JS↔UI boundary or across separate worklet invocations. Each `renderer.X()`
+ * call ends up reading a frozen snapshot of the bindings, so changes made
+ * by `beginStroke` are invisible to a later `takeImage` call. Plain object
+ * MEMBER mutations DO survive across worklet invocations because Reanimated
+ * tracks the object reference. The `IncrementalStampExpander` factory uses
+ * the same pattern.
  */
 export function createStampRenderer(): StampRenderer {
   const state: {
@@ -135,32 +153,15 @@ export function createStampRenderer(): StampRenderer {
     config: StampRendererConfig | null;
     paint: SkPaint | null;
     shader: SkShader | null;
-    recorder: SkPictureRecorder | null;
-    canvas: SkCanvas | null;
+    /** Transient stroke buffer. Pixels live here for the gesture's lifetime;
+     *  baked onto the layer surface at commit and disposed afterwards. */
+    surface: SkSurface | null;
   } = {
     active: false,
     config: null,
     paint: null,
     shader: null,
-    recorder: null,
-    canvas: null,
-  };
-
-  /**
-   * Open a fresh `SkPictureRecorder` sized to the stroke buffer. Used by
-   * `beginStroke` and re-used after every `takePicture`.
-   */
-  const openRecorder = (cfg: StampRendererConfig): void => {
-    'worklet';
-    const r = Skia.PictureRecorder();
-    const c = r.beginRecording({
-      x: 0,
-      y: 0,
-      width: cfg.width,
-      height: cfg.height,
-    });
-    state.recorder = r;
-    state.canvas = c;
+    surface: null,
   };
 
   /**
@@ -174,10 +175,10 @@ export function createStampRenderer(): StampRenderer {
     d?.dispose?.();
   };
 
-  /** Draw one stamp into the open recorder using the pooled paint. */
-  const drawOne = (stamp: Stamp): void => {
+  /** Draw one stamp into the given canvas using the pooled paint. */
+  const drawOne = (canvas: SkCanvas, stamp: Stamp): void => {
     'worklet';
-    if (state.canvas === null || state.paint === null) return;
+    if (state.paint === null) return;
     // Per-stamp opacity is the only field that varies inside a stroke. We
     // express it through `paint.setAlphaf` so the shader's pre-baked
     // (color × stamp opacity) baseline is modulated without rebuilding the
@@ -185,11 +186,11 @@ export function createStampRenderer(): StampRenderer {
     // opacity=1; per-stamp alpha lands here.
     state.paint.setAlphaf(stamp.opacity);
 
-    state.canvas.save();
-    state.canvas.translate(stamp.x, stamp.y);
-    state.canvas.scale(stamp.size, stamp.size);
-    state.canvas.drawCircle(0, 0, 0.5, state.paint);
-    state.canvas.restore();
+    canvas.save();
+    canvas.translate(stamp.x, stamp.y);
+    canvas.scale(stamp.size, stamp.size);
+    canvas.drawCircle(0, 0, 0.5, state.paint);
+    canvas.restore();
   };
 
   const renderer: StampRenderer = {
@@ -219,47 +220,61 @@ export function createStampRenderer(): StampRenderer {
       p.setBlendMode(next.erase ? BlendMode.DstOut : BlendMode.SrcOver);
       state.paint = p;
 
-      openRecorder(next);
+      // Allocate the transient stroke buffer. Failure (null surface) leaves
+      // the renderer inactive so the brush pipeline can cancel cleanly.
+      state.surface = Skia.Surface.MakeOffscreen(next.width, next.height);
+      if (state.surface === null) {
+        tryDispose(state.paint);
+        tryDispose(state.shader);
+        state.paint = null;
+        state.shader = null;
+        state.config = null;
+        return;
+      }
+
       state.active = true;
     },
 
     drawStamps(stamps: ReadonlyArray<Stamp>): void {
       'worklet';
-      if (!state.active) return;
+      if (!state.active || state.surface === null) return;
+      const canvas = state.surface.getCanvas();
       for (let i = 0; i < stamps.length; i++) {
         const s = stamps[i];
-        if (s !== undefined) drawOne(s);
+        if (s !== undefined) drawOne(canvas, s);
       }
+      // Flush GPU commands so the next snapshot reflects what we just drew.
+      state.surface.flush();
     },
 
-    takePicture(): SkPicture | null {
+    takeImage(): SkImage | null {
       'worklet';
-      if (!state.active || state.recorder === null || state.config === null) return null;
-      const picture = state.recorder.finishRecordingAsPicture();
-      // Immediately reopen a fresh recorder so further `drawStamps` calls
-      // keep accumulating. The previous Picture is now immutable from the
-      // recorder's perspective, but remains valid for replay.
-      state.recorder = null;
-      state.canvas = null;
-      openRecorder(state.config);
-      return picture;
+      if (!state.active || state.surface === null) return null;
+      return state.surface.makeImageSnapshot();
+    },
+
+    getSurface(): SkSurface | null {
+      'worklet';
+      if (!state.active) return null;
+      return state.surface;
     },
 
     endStroke(): void {
       'worklet';
-      if (!state.active && state.paint === null && state.shader === null && state.recorder === null) {
+      if (
+        !state.active
+        && state.paint === null
+        && state.shader === null
+        && state.surface === null
+      ) {
         // Already disposed — idempotent.
         return;
       }
       state.active = false;
-      // Drop any open recorder. We do not finalize it: an in-flight picture
-      // that the caller hasn't taken is intentionally discarded (cancel
-      // semantics). The recorder's resources release when `recorder` goes
-      // out of scope.
-      state.recorder = null;
-      state.canvas = null;
+      tryDispose(state.surface);
       tryDispose(state.paint);
       tryDispose(state.shader);
+      state.surface = null;
       state.paint = null;
       state.shader = null;
       state.config = null;

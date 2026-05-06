@@ -126,6 +126,34 @@ export interface LayerSurfaceRegistry {
   ): void;
 
   /**
+   * Worklet-callable. Take a fresh snapshot of `strokeSurface` and bake it
+   * onto the layer's persistent surface using `blendMode`, snapshot the
+   * layer surface into the reactive image handle, dispose the previous
+   * SkImage, and emit a `LayerCommitEvent` to subscribers.
+   *
+   * Crucially, the `strokeSurface.makeImageSnapshot()` call lives **inside**
+   * this worklet — the resulting SkImage never crosses a Reanimated
+   * worklet-args boundary, which sidesteps the JSI handle-lifetime issue
+   * that caused `Attempted to access a disposed object` failures when an
+   * SkImage was passed in via the args payload.
+   *
+   * Preconditions:
+   *  - `getOrCreateSurface(layerId, …)` was called at gesture-begin time.
+   *  - `strokeSurface` is the active stroke buffer (non-null, not yet
+   *    disposed by `StampRenderer.endStroke()`).
+   *
+   * On a snapshot failure (sync `makeImageSnapshot` returns null), the
+   * registry logs a warning and leaves the layer image unchanged; the
+   * commit becomes a no-op.
+   */
+  commitSurfaceToLayer(
+    layerId: LayerId,
+    strokeSurface: SkSurface,
+    blendMode: BlendMode,
+    bbox: { x: number; y: number; w: number; h: number },
+  ): void;
+
+  /**
    * JS-thread synchronous read. Returns the current SkImage for `layerId`
    * (the same handle held by the reactive SharedValue, not a fresh copy).
    * Used by undo/redo snapshot capture; the caller must not dispose the
@@ -379,6 +407,72 @@ export function createLayerSurfaceRegistry(
       }
 
       rec.seq += 1;
+      const event: LayerCommitEvent = {
+        layerId,
+        bbox: { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h },
+        seq: rec.seq,
+      };
+      notify(event);
+    },
+
+    commitSurfaceToLayer(
+      layerId: LayerId,
+      strokeSurface: SkSurface,
+      blendMode: BlendMode,
+      bbox: { x: number; y: number; w: number; h: number },
+    ): void {
+      'worklet';
+      // eslint-disable-next-line no-console
+      console.log('[commitSurfaceToLayer] enter', { layerId, recordsSize: records.size });
+      const rec = records.get(layerId);
+      if (rec === undefined) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[LayerSurfaceRegistry] commit on unknown layer',
+          { layerId, knownLayers: Array.from(records.keys()) },
+        );
+        return;
+      }
+      // Flush the stroke surface so its pending GPU work is queued before
+      // we read pixels from it via the snapshot below.
+      strokeSurface.flush();
+      // Take a snapshot LOCALLY — this SkImage never crosses a worklet-args
+      // boundary, so its lifetime is bounded by this worklet body and the
+      // disposed-handle issue does not apply.
+      const strokeImage = strokeSurface.makeImageSnapshot();
+      if (strokeImage === null || strokeImage === undefined) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[LayerSurfaceRegistry] strokeSurface.makeImageSnapshot returned null',
+          { layerId },
+        );
+        return;
+      }
+      const canvas = rec.surface.getCanvas();
+      // Bake the stroke image onto the layer using the stroke's blend mode.
+      // saveLayer ensures DstOut / Plus / SrcOver are applied against the
+      // layer's existing pixels rather than the destination clip behind it.
+      const paint = Skia.Paint();
+      paint.setBlendMode(blendMode);
+      canvas.saveLayer(paint);
+      canvas.drawImage(strokeImage, 0, 0);
+      canvas.restore();
+      const disposablePaint = paint as unknown as { dispose?: () => void };
+      disposablePaint.dispose?.();
+
+      const ok = snapshotInto(rec);
+      if (!ok) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[LayerSurfaceRegistry] snapshot returned null; layer image unchanged',
+          { layerId, snapshotPath },
+        );
+        return;
+      }
+
+      rec.seq += 1;
+      // eslint-disable-next-line no-console
+      console.log('[commitSurfaceToLayer] success', { layerId, seq: rec.seq });
       const event: LayerCommitEvent = {
         layerId,
         bbox: { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h },

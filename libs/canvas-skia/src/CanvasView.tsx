@@ -49,10 +49,8 @@ import {
   Fill,
   Group,
   Image,
-  Picture,
   Rect,
   type SkImage,
-  type SkPicture,
 } from '@shopify/react-native-skia';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { View, type LayoutChangeEvent, type ViewStyle } from 'react-native';
@@ -74,18 +72,14 @@ export interface CanvasViewProps {
   /** Callback fired once the adapter exists. */
   onAdapterReady?: (adapter: SkiaRenderAdapter) => void;
   /**
-   * In-progress brush stroke as a finalized `SkPicture` produced by
-   * `useBrushPipeline` (Phase 5). RN-Skia subscribes to the SharedValue by
-   * JSI and repaints on the GPU thread; React renders are not involved.
-   *
-   * The SharedValue must always carry a non-null `SkPicture` (typically a
-   * 1×1 empty sentinel between strokes). RN-Skia's `<Picture>` element
-   * crashes with `Invalid prop value for SkTextBlob received` when the
-   * value is `null` — it falls through to a default SkObject interpretation
-   * that does not match the picture handle. The pipeline owns the sentinel
-   * and swaps in the live picture on each `pushPoint`.
+   * Snapshot of the active stroke surface produced by `useBrushPipeline`
+   * (Phase 5). Carries `null` when no stroke is in progress; carries a
+   * fresh `SkImage` per touch event during a stroke. RN-Skia's `<Image>`
+   * element subscribes to the SharedValue by JSI and repaints on the GPU
+   * thread; React renders are not involved. Null values render nothing
+   * for that frame, matching the per-layer `<Image>` chain's behaviour.
    */
-  activePicture?: SharedValue<SkPicture>;
+  activeStrokeImage?: SharedValue<SkImage | null>;
 }
 
 /**
@@ -135,7 +129,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
   style,
   className,
   onAdapterReady,
-  activePicture,
+  activeStrokeImage,
 }) => {
   // Adapter must be a single, stable instance for the entire lifetime of
   // this component. `useMemo` is not a semantic guarantee in React 18 — it
@@ -242,20 +236,24 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
             ))}
 
             {/* In-progress active stroke. Mounted whenever the producer
-                (useBrushPipeline) provides the SharedValue. The producer
-                guarantees the value is a non-null `SkPicture` at all times
-                — between strokes it carries a 1×1 empty sentinel that
-                replays as a no-op on the GPU thread. The legacy
-                conditional-mount approach (predicated on .value !== null)
-                is unsafe because RN-Skia's `<Picture>` falls through to a
-                default SkObject interpretation when handed null and
-                crashes with `Invalid prop value for SkTextBlob received`.
+                (useBrushPipeline) provides the SharedValue. The SharedValue
+                holds `null` between strokes and a fresh `SkImage` per touch
+                event during a stroke. RN-Skia's `<Image>` tolerates a null
+                value and renders nothing for that frame.
 
                 The cast is necessary because RN-Skia's `SkiaProps<T>` does
-                not infer the structural-arm assignment for `T = SkPicture`
-                when handed a Reanimated SharedValue. */}
-            {activePicture ? (
-              <Picture picture={activePicture as unknown as SkPicture} />
+                not infer the structural-arm assignment for SharedValue when
+                the target type is a union containing `null` — runtime
+                behaviour is correct (RN-Skia detects the `.value` property
+                via JSI). */}
+            {activeStrokeImage ? (
+              <Image
+                image={activeStrokeImage as unknown as SkImage}
+                x={0}
+                y={0}
+                width={docWidth}
+                height={docHeight}
+              />
             ) : null}
           </Group>
         )}

@@ -57,29 +57,13 @@ import {
   type SkiaRenderAdapter,
   type StampRenderer,
 } from '@diffusecraft/canvas-skia';
-import { BlendMode, Skia, type SkPicture } from '@shopify/react-native-skia';
+import { BlendMode, type SkImage } from '@shopify/react-native-skia';
 import {
   makeMutable,
   runOnJS,
   runOnUI,
   type SharedValue,
 } from 'react-native-reanimated';
-
-/**
- * 1×1 empty `SkPicture` sentinel. RN-Skia's `<Picture>` element does NOT
- * tolerate a `null` SharedValue — it falls through to its default
- * `SkTextBlob` interpretation and crashes with
- * `Invalid prop value for SkTextBlob received`. Mounting `<Picture>`
- * always with a non-null value avoids that. The empty picture replays as
- * a no-op on the GPU thread, so there is no rendering cost between strokes.
- *
- * Allocated lazily once per session at module load.
- */
-const EMPTY_PICTURE: SkPicture = (() => {
-  const recorder = Skia.PictureRecorder();
-  recorder.beginRecording({ x: 0, y: 0, width: 1, height: 1 });
-  return recorder.finishRecordingAsPicture();
-})();
 
 /** v1 active-stroke buffer dimension cap (Req 9.4). */
 const MAX_BUFFER_DIMENSION = 4096;
@@ -99,18 +83,18 @@ export interface BeginStrokeConfig {
 /**
  * Worklet-callable handle returned by `useBrushPipeline`.
  *
- * `activePicture` is the live link into `<CanvasView>`. Updating it on the
- * UI thread does not trigger a React render — RN-Skia subscribes by JSI and
- * repaints the canvas imperatively.
+ * `activeStrokeImage` is the live link into `<CanvasView>`. Updating it on
+ * the UI thread does not trigger a React render — RN-Skia's `<Image>`
+ * element subscribes by JSI and repaints the canvas imperatively.
  */
 export interface BrushPipelineHandle {
   /**
-   * SharedValue holding the active stroke's latest picture. Carries
-   * `EMPTY_PICTURE` (a 1×1 no-op picture) when no stroke is in progress —
-   * a non-null sentinel is required because RN-Skia's `<Picture>` element
-   * crashes when its SharedValue value is `null`.
+   * SharedValue holding a snapshot of the active stroke surface (the
+   * transient stroke buffer that lives for one gesture). Carries `null`
+   * when no stroke is in progress; RN-Skia's `<Image>` element tolerates
+   * a null value and renders nothing for that frame.
    */
-  readonly activePicture: SharedValue<SkPicture>;
+  readonly activeStrokeImage: SharedValue<SkImage | null>;
   /**
    * JS-thread entry point. Reads the editor-store snapshot once, then hops
    * to the UI thread to allocate the expander/renderer and push the first
@@ -197,11 +181,11 @@ export function useBrushPipeline(
   // exactly once across renders — `useSharedValue` would re-init the value
   // on every fast-refresh, which is the right semantic for component state
   // but not for our gesture-spanning handle.
-  const activePictureRef = useRef<SharedValue<SkPicture> | null>(null);
-  if (activePictureRef.current === null) {
-    activePictureRef.current = makeMutable<SkPicture>(EMPTY_PICTURE);
+  const activeStrokeImageRef = useRef<SharedValue<SkImage | null> | null>(null);
+  if (activeStrokeImageRef.current === null) {
+    activeStrokeImageRef.current = makeMutable<SkImage | null>(null);
   }
-  const activePicture = activePictureRef.current;
+  const activeStrokeImage = activeStrokeImageRef.current;
 
   // Per-stroke runtime. One `SharedValue` reused across all strokes; fields
   // mutated inside worklets via `state.value.X = ...`. Reanimated holds the
@@ -259,12 +243,11 @@ export function useBrushPipeline(
 
       const stamps = expander.pushPoint(firstPoint);
       renderer.drawStamps(stamps);
-      const pic = renderer.takePicture();
-      activePicture.value = pic !== null ? pic : EMPTY_PICTURE;
+      activeStrokeImage.value = renderer.takeImage();
 
       // Resolve blend mode for the eventual commit. Mask layers always
       // route through SrcOver because the renderer already burns the
-      // luminance contribution into the picture's alpha; erase uses
+      // luminance contribution into the stroke surface's alpha; erase uses
       // DstOut. Paint uses SrcOver.
       const blend = erase ? BlendMode.DstOut : BlendMode.SrcOver;
 
@@ -293,7 +276,7 @@ export function useBrushPipeline(
       } catch (_inner: unknown) {
         // swallow
       }
-      activePicture.value = EMPTY_PICTURE;
+      activeStrokeImage.value = null;
       strokeState.value = createInitialStrokeState();
     }
   };
@@ -309,8 +292,7 @@ export function useBrushPipeline(
     try {
       const stamps = s.expander.pushPoint(point);
       s.renderer.drawStamps(stamps);
-      const pic = s.renderer.takePicture();
-      activePicture.value = pic !== null ? pic : EMPTY_PICTURE;
+      activeStrokeImage.value = s.renderer.takeImage();
     } catch (err: unknown) {
       runOnJS(jsWarn)('pushPoint worklet error', String(err));
       // Cancel the stroke on the UI thread; we cannot safely call back into
@@ -325,7 +307,7 @@ export function useBrushPipeline(
       } catch (_inner: unknown) {
         // swallow
       }
-      activePicture.value = EMPTY_PICTURE;
+      activeStrokeImage.value = null;
       strokeState.value = createInitialStrokeState();
       return;
     }
@@ -353,17 +335,17 @@ export function useBrushPipeline(
     if (!s.active || s.renderer === null || s.expander === null) return;
 
     try {
-      const picture = s.renderer.takePicture();
-      if (picture !== null && s.registry !== null && s.layerId !== null) {
+      const strokeSurface = s.renderer.getSurface();
+      if (strokeSurface !== null && s.registry !== null && s.layerId !== null) {
         commitActiveStrokeWorklet({
           registry: s.registry,
           layerId: s.layerId,
-          picture,
+          strokeSurface,
           blendMode: s.blendMode,
           bbox: s.bbox,
         });
-      } else if (picture === null) {
-        runOnJS(jsWarn)('commitStroke: takePicture returned null', null);
+      } else if (strokeSurface === null) {
+        runOnJS(jsWarn)('commitStroke: getSurface returned null', null);
       }
     } catch (err: unknown) {
       runOnJS(jsWarn)('commitStroke worklet error', String(err));
@@ -378,7 +360,7 @@ export function useBrushPipeline(
       } catch (_inner: unknown) {
         // swallow
       }
-      activePicture.value = EMPTY_PICTURE;
+      activeStrokeImage.value = null;
       strokeState.value = createInitialStrokeState();
     }
   };
@@ -389,7 +371,7 @@ export function useBrushPipeline(
     const s = strokeState.value;
     if (!s.active) {
       // Idempotent: no-op when no stroke is in flight.
-      activePicture.value = EMPTY_PICTURE;
+      activeStrokeImage.value = null;
       return;
     }
     try {
@@ -402,7 +384,7 @@ export function useBrushPipeline(
     } catch (_inner: unknown) {
       // swallow
     }
-    activePicture.value = EMPTY_PICTURE;
+    activeStrokeImage.value = null;
     strokeState.value = createInitialStrokeState();
   };
 
@@ -416,7 +398,7 @@ export function useBrushPipeline(
 
   const handle = useMemo<BrushPipelineHandle>(() => {
     return {
-      activePicture,
+      activeStrokeImage,
       beginStroke(
         config: BeginStrokeConfig,
         firstPoint: StrokePoint,
@@ -505,7 +487,7 @@ export function useBrushPipeline(
     // only varying input is `adapter`, which we read through `adapterRef`
     // so the handle identity itself stays stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePicture]);
+  }, [activeStrokeImage]);
 
   // Cancel any in-flight stroke if the hook unmounts mid-gesture (e.g. a
   // navigation tear-down). This is JS-thread; the worklet body is

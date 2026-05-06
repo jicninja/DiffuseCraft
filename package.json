@@ -14,7 +14,7 @@
     "lint": "pnpm run lint:no-raw-hex",
     "lint:no-raw-hex": "tsx tools/check-no-raw-hex.ts",
     "typecheck": "tsc -b --pretty",
-    "dev:mobile": "pnpm --filter @diffusecraft/mobile start",
+    "dev:mobile": "pnpm --filter @diffusecraft/mobile ios",
     "snapshot:pen": "tsx tools/snapshot-pen.ts",
     "verify:visual": "tsx apps/mobile/visual-verification/scripts/run.ts"
   },
