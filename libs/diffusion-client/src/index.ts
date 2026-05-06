@@ -39,6 +39,17 @@ export { StdioTransport, createStdioTransport } from "./transports";
 export type { StdioTransportConfig } from "./transports";
 
 /**
+ * HTTP transport (FR-7, B.3). Speaks MCP over the Streamable HTTP profile
+ * via `@modelcontextprotocol/sdk`'s `StreamableHTTPClientTransport`,
+ * carrying a bearer token on the `Authorization` header of every fetch
+ * (POST + long-lived SSE GET + DELETE). Runtime-portable across Node
+ * 18+ and modern browsers. Reconnect orchestration (FR-29 / FR-30 /
+ * FR-31) lives in B.4.
+ */
+export { HttpTransport, createHttpTransport } from "./transports";
+export type { HttpTransportConfig } from "./transports";
+
+/**
  * Type re-exports from `@diffusecraft/mcp-tools` (requirements §3.1 FR-3,
  * design.md §3). Consumers can call typed SDK methods without taking a
  * direct dependency on the catalog package.

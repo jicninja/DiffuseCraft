@@ -94,6 +94,7 @@ import type {
 } from "@diffusecraft/mcp-tools";
 
 import { ConnectionError, ServerError } from "../errors.js";
+import { appendResourceQuery } from "./_query.js";
 import type {
   HandshakeResult,
   ResourceReadQuery,
@@ -566,30 +567,6 @@ export class StdioTransport implements Transport {
     }
     return err;
   }
-}
-
-/**
- * Append `?since` / `?fields` query parameters to a resource URI. The
- * MCP `readResource` request only carries the URI itself, so query
- * support (FR-17) lives on the URI string. Empty / undefined queries
- * leave the URI untouched. Multi-value `fields` are joined with `,`
- * (matching `mcp-tool-catalog` FR-46's sparse-fieldset shape).
- */
-function appendResourceQuery(
-  uri: string,
-  query: ResourceReadQuery | undefined,
-): string {
-  if (!query) return uri;
-  const params: string[] = [];
-  if (query.since !== undefined) {
-    params.push(`since=${encodeURIComponent(query.since)}`);
-  }
-  if (query.fields !== undefined && query.fields.length > 0) {
-    params.push(`fields=${encodeURIComponent(query.fields.join(","))}`);
-  }
-  if (params.length === 0) return uri;
-  const sep = uri.includes("?") ? "&" : "?";
-  return `${uri}${sep}${params.join("&")}`;
 }
 
 /**

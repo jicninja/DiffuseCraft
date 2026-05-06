@@ -30,3 +30,13 @@ export { InMemoryTransport, createInMemoryTransport } from "./in-memory.js";
  */
 export { StdioTransport, createStdioTransport } from "./stdio.js";
 export type { StdioTransportConfig } from "./stdio.js";
+
+/**
+ * HTTP transport (FR-7 / FR-10, B.3). Wraps
+ * `@modelcontextprotocol/sdk/client/streamableHttp` and rides bearer-token
+ * auth on the `Authorization` header of every fetch. Runtime-portable —
+ * Node 18+ and modern browsers ship the required `fetch` + `URL` globals.
+ * Reconnect orchestration (FR-29 / FR-30 / FR-31) lives in B.4.
+ */
+export { HttpTransport, createHttpTransport } from "./http.js";
+export type { HttpTransportConfig } from "./http.js";
