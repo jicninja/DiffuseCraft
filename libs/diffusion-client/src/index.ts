@@ -251,3 +251,15 @@ export type {
   TokenRotationEvent,
   TokenRotationListener,
 } from "./shared/token-provider.js";
+
+/**
+ * Catalog → MCP capability mapping (J.1, FR-32, design.md §10.3).
+ * Re-exported so test harnesses + advanced consumers can verify the
+ * exact MCP wire shape advertised at handshake without going through
+ * the full transport.
+ */
+export { mapToMcpCapabilities } from "./shared/capabilities-map.js";
+export type {
+  McpClientCapabilities,
+  MapToMcpCapabilitiesInput,
+} from "./shared/capabilities-map.js";

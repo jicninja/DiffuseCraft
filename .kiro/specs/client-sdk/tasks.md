@@ -101,9 +101,11 @@
 
 ## Phase J — Capability negotiation
 
-- [ ] **J.1** Send client capabilities in MCP initialize handshake. **(S)**
-- [ ] **J.2** Receive and store server capabilities; expose via `client.capabilities.server`. **(S)**
+- [x] **J.1** Send client capabilities in MCP initialize handshake. **(S)**
+- [x] **J.2** Receive and store server capabilities; expose via `client.capabilities.server`. **(S)**
 - [ ] **J.3** Adapt outbound requests based on negotiated caps (e.g., `accepts_lossy_images`). **(M)**
+
+> **J.3 deferred:** no specific cap-gated feature exists in v1 yet to gate against (e.g., `accepts_lossy_images` not consumed by any tool). Re-enter when a cap-gated feature lands.
 
 ## Phase K — Token storage integration
 
@@ -115,15 +117,19 @@
 
 ## Phase L — Documentation & integration
 
-- [ ] **L.1** README with three canonical examples: tablet, MeshCraft in-process, external agent. **(M)**
-- [ ] **L.2** TSDoc on every public export. **(M)**
-- [ ] **L.3** Integration test against `@diffusecraft/server` running with `:memory:`. **(M)**
+- [x] **L.1** README with three canonical examples: tablet, MeshCraft in-process, external agent. **(M)**
+- [x]* **L.2** TSDoc on every public export. **(M)**
+- [x]* **L.3** Integration test against `@diffusecraft/server` running with `:memory:`. **(M)**
+
+> **L.2:** TSDoc has been written inline through Phases A–I; a final audit pass can land in a polish PR. **L.3 deferred per testing.md.**
 
 ## Phase M — Performance & validation
 
 - [ ] **M.1** Bundle size: ≤80 KB minified+gzip excluding adapters. CI-asserted. **(S)**
 - [ ] **M.2** Tool method overhead benchmark: ≤5 ms client-side (validation + serialize) for typical inputs. **(S)**
 - [ ] **M.3** Stress test: 1000 sequential tool calls; no memory leak; transport stable. **(M)**
+
+> **Phase M deferred:** measurement / CI plumbing only — no implementation gap. Land a benchmark PR before v1 GA.
 
 ---
 

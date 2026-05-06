@@ -93,6 +93,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import type {
+  ClientCapabilities as CatalogClientCapabilities,
   EventName,
   EventPayload,
   ResourceUri,
@@ -103,6 +104,7 @@ import type {
 
 import type { TokenProvider } from "../config.js";
 import { ConnectionError } from "../errors.js";
+import { mapToMcpCapabilities } from "../shared/capabilities-map.js";
 import { TokenCache } from "../shared/token-provider.js";
 import {
   isErrorToolResult,
@@ -172,6 +174,35 @@ export interface HttpTransportConfig {
    * Defaults to `{ name: "diffusecraft-client", version: "0.0.0" }`.
    */
   clientInfo?: { name: string; version: string };
+  /**
+   * Catalog-level {@link CatalogClientCapabilities} the SDK declares at
+   * handshake (J.1, FR-32). Forwarded verbatim to {@link mapToMcpCapabilities}
+   * which translates it (plus the sampling-handler state, see
+   * {@link getSupportsSampling}) into the MCP wire-shape capabilities
+   * object passed to `new Client(clientInfo, { capabilities })`. The
+   * mapping is re-evaluated on every reconnect attempt — see
+   * {@link rebuildClient} — so a sampling handler attached after the
+   * initial connect is observed by the next reconnect.
+   *
+   * Optional for backwards compatibility — when omitted the transport
+   * falls back to an empty MCP capability object (the pre-J.1 behaviour).
+   * The SDK's `createDiffuseCraftClient` always populates this slot from
+   * the validated `ClientConfig.capabilities` (which carries documented
+   * defaults via Zod).
+   */
+  clientCapabilities?: CatalogClientCapabilities;
+  /**
+   * Sampling-capability getter (J.1, design.md §10.3). Invoked at
+   * `connect()` and at every `rebuildClient()` to decide whether to
+   * advertise `sampling: {}` on the MCP capability payload. Wired by
+   * `createDiffuseCraftClient` to `() => forwarder.supportsSampling`,
+   * so consumers that register a handler at any point see it advertised
+   * on the next handshake.
+   *
+   * Optional — when omitted, sampling is not advertised. Always-true
+   * test doubles can pass `() => true`.
+   */
+  getSupportsSampling?: () => boolean;
   /**
    * Maximum wall-clock grace, in milliseconds, that {@link disconnect} will
    * wait for the SDK's `client.close()` to resolve before logging a
@@ -521,7 +552,18 @@ export class HttpTransport implements Transport {
       name: "diffusecraft-client",
       version: "0.0.0",
     };
-    const client = new Client(clientInfo, { capabilities: {} });
+    // J.1 — translate the catalog-level `ClientCapabilities` (consumer-
+    // declared on `ClientConfig.capabilities`) plus the live sampling-
+    // forwarder state into the MCP wire shape and hand it to the SDK
+    // client constructor. The SDK forwards this verbatim to the server
+    // on the `initialize` request (FR-32, design.md §10.3).
+    const mcpCapabilities = this.config.clientCapabilities
+      ? mapToMcpCapabilities({
+          catalog: this.config.clientCapabilities,
+          supportsSampling: this.config.getSupportsSampling?.() ?? false,
+        })
+      : {};
+    const client = new Client(clientInfo, { capabilities: mcpCapabilities });
 
     // Wire the unexpected-close path so `isHealthy()` reflects truth
     // when the server tears down the session without our `disconnect()`
@@ -1167,7 +1209,18 @@ export class HttpTransport implements Transport {
       name: "diffusecraft-client",
       version: "0.0.0",
     };
-    const client = new Client(clientInfo, { capabilities: {} });
+    // J.1 — re-evaluate the catalog → MCP capability mapping on every
+    // rebuild. The sampling slot is sourced from
+    // `getSupportsSampling()` so a handler attached AFTER the initial
+    // `connect()` is observed by the next reconnect's `initialize`
+    // payload.
+    const mcpCapabilities = this.config.clientCapabilities
+      ? mapToMcpCapabilities({
+          catalog: this.config.clientCapabilities,
+          supportsSampling: this.config.getSupportsSampling?.() ?? false,
+        })
+      : {};
+    const client = new Client(clientInfo, { capabilities: mcpCapabilities });
 
     // Same onclose wiring as the original connect: re-trigger the
     // reconnect loop on subsequent unsolicited closes.

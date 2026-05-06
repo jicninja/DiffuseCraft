@@ -85,6 +85,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import type {
+  ClientCapabilities as CatalogClientCapabilities,
   EventName,
   EventPayload,
   ResourceUri,
@@ -94,6 +95,7 @@ import type {
 } from "@diffusecraft/mcp-tools";
 
 import { ConnectionError } from "../errors.js";
+import { mapToMcpCapabilities } from "../shared/capabilities-map.js";
 import {
   isErrorToolResult,
   serverErrorFromIsErrorResult,
@@ -138,6 +140,32 @@ export interface StdioTransportConfig {
    * Defaults to `{ name: "diffusecraft-client", version: "0.0.0" }`.
    */
   clientInfo?: { name: string; version: string };
+  /**
+   * Catalog-level {@link CatalogClientCapabilities} the SDK declares at
+   * handshake (J.1, FR-32). Forwarded verbatim to {@link mapToMcpCapabilities}
+   * which translates it (plus the sampling-handler state, see
+   * {@link getSupportsSampling}) into the MCP wire-shape capabilities
+   * object passed to `new Client(clientInfo, { capabilities })`.
+   *
+   * Optional for backwards compatibility — when omitted the transport
+   * falls back to an empty MCP capability object (the pre-J.1 behaviour).
+   * The SDK's `createDiffuseCraftClient` always populates this slot from
+   * the validated `ClientConfig.capabilities` (which carries documented
+   * defaults via Zod).
+   */
+  clientCapabilities?: CatalogClientCapabilities;
+  /**
+   * Sampling-capability getter (J.1, design.md §10.3). Invoked at
+   * `connect()` (and at every `rebuildClient()` for HTTP) to decide
+   * whether to advertise `sampling: {}` on the MCP capability payload.
+   * Wired by `createDiffuseCraftClient` to
+   * `() => forwarder.supportsSampling`, so consumers that register a
+   * handler before calling `connect()` see it advertised.
+   *
+   * Optional — when omitted, sampling is not advertised. Always-true
+   * test doubles can pass `() => true`.
+   */
+  getSupportsSampling?: () => boolean;
   /**
    * Maximum wall-clock grace, in milliseconds, that {@link disconnect} will
    * wait for the child to exit before logging a warning. Defaults to
@@ -281,7 +309,18 @@ export class StdioTransport implements Transport {
       name: "diffusecraft-client",
       version: "0.0.0",
     };
-    const client = new Client(clientInfo, { capabilities: {} });
+    // J.1 — translate the catalog-level `ClientCapabilities` (consumer-
+    // declared on `ClientConfig.capabilities`) plus the live sampling-
+    // forwarder state into the MCP wire shape and hand it to the SDK
+    // client constructor. The SDK forwards this verbatim to the server
+    // on the `initialize` request (FR-32, design.md §10.3).
+    const mcpCapabilities = this.config.clientCapabilities
+      ? mapToMcpCapabilities({
+          catalog: this.config.clientCapabilities,
+          supportsSampling: this.config.getSupportsSampling?.() ?? false,
+        })
+      : {};
+    const client = new Client(clientInfo, { capabilities: mcpCapabilities });
 
     // Wire the unexpected-close path so `isHealthy()` reflects the truth
     // when the child exits without our `disconnect()` driving it.

@@ -40,12 +40,18 @@
  *     `onConnectionStatus(...)` (B.4) — so the client does not have to
  *     wire reconnect-status forwarding itself.
  *
- *   - **Server capabilities are populated from `transport.connect()`.**
- *     The transports return a {@link HandshakeResult} carrying a
- *     placeholder `serverCapabilities` (Phase G replaces this with a
- *     real read of `diffusecraft://server/info` once the resource
- *     catalog ships). The client stores it on `capabilities.server`
- *     verbatim so consumers see the canonical shape even pre-Phase G.
+ *   - **Server capabilities are populated from `transport.connect()`
+ *     and `diffusecraft://server/info`.** The transports return a
+ *     {@link HandshakeResult} carrying a placeholder `serverCapabilities`
+ *     (the standard MCP `initialize` response does not carry the
+ *     DiffuseCraft domain shape). After the handshake resolves, J.2's
+ *     {@link populateServerCapabilitiesFromInfo} reads the
+ *     `diffusecraft://server/info` resource and projects the payload
+ *     onto the catalog's {@link ServerCapabilities} shape, replacing
+ *     the placeholder. A failed read (the server-info resource handler
+ *     is an upstream gap tracked by `server-architecture`) leaves the
+ *     placeholder intact and emits a structured warning — `connect()`
+ *     does NOT fail when capabilities are unavailable.
  *
  *   - **Disposal cascade.** `dispose()` and `disconnect()` both fire
  *     the same teardown chain: stop the sampling forwarder, dispose the
@@ -55,7 +61,14 @@
  *     reusable so a subsequent `connect()` re-establishes the session.
  */
 
-import type { ServerCapabilities } from "@diffusecraft/mcp-tools";
+// `ServerCapabilities` / `ServerInfo` are Zod schemas (runtime values)
+// AND inferred TypeScript types — `@diffusecraft/mcp-tools` exports both
+// under the same name. Import them as values; the type narrowing rides
+// on the same identifier (per Zod's `z.infer<typeof T>` pattern).
+import {
+  ServerCapabilities,
+  ServerInfo,
+} from "@diffusecraft/mcp-tools";
 
 import type {
   ClientCapabilities,
@@ -173,11 +186,15 @@ export interface DiffuseCraftClient {
   };
 
   /**
-   * Negotiated capabilities. `client` is what the SDK declared at
-   * construction time (FR-32); `server` is populated from the
-   * handshake result returned by `transport.connect()`. The current
-   * `ServerCapabilities` is a placeholder until Phase G replaces it
-   * with a real read of `diffusecraft://server/info`.
+   * Negotiated capabilities (FR-32, design.md §3). `client` is what the
+   * SDK declared at construction time and is forwarded to the server
+   * on the MCP `initialize` request (mapped to the wire shape via
+   * {@link mapToMcpCapabilities} — J.1). `server` is populated by
+   * `connect()`: starts with the transport's handshake placeholder,
+   * then is replaced by the projection of `diffusecraft://server/info`
+   * when that resource is reachable (J.2). `null` only between
+   * construction and the first successful `connect()`, and after
+   * `disconnect()`.
    */
   capabilities: {
     client: ClientCapabilities;
@@ -301,8 +318,17 @@ class DiffuseCraftClientImpl implements DiffuseCraftClient {
     this.logger = config.logger ?? NOOP_LOGGER;
     this.clientCapabilities = config.capabilities;
 
-    // 1) Construct the concrete transport.
-    this.transport = buildTransport(config);
+    // 1) Construct the concrete transport. The forwarder-backed
+    //    `getSupportsSampling` callback is supplied via a thunk so the
+    //    transport can read the live state at every handshake (J.1 +
+    //    Phase I integration). Because the forwarder is constructed
+    //    AFTER the transport (it needs the transport reference), the
+    //    thunk reads through `this.samplingForwarder` after assignment.
+    //    Pre-assignment evaluations return `false` (no handler can be
+    //    registered before the forwarder exists).
+    this.transport = buildTransport(config, {
+      getSupportsSampling: () => this.samplingForwarder?.supportsSampling ?? false,
+    });
 
     // 2) Construct the event bus. The bus auto-bridges the HTTP
     //    transport's reconnect-status channel when present (B.4 / E.3),
@@ -321,7 +347,12 @@ class DiffuseCraftClientImpl implements DiffuseCraftClient {
     //    transport-level handler so server-initiated sampling requests
     //    flow even before a consumer attaches an `onSample` handler
     //    (the forwarder throws SamplingNotSupportedError in that
-    //    branch — design.md §10.4).
+    //    branch — design.md §10.4). The transport's
+    //    `getSupportsSampling` thunk (wired above) reads
+    //    `this.samplingForwarder.supportsSampling` once this assignment
+    //    completes — so the FIRST `connect()` after a consumer calls
+    //    `client.sampling.onSample(handler)` advertises sampling on
+    //    the MCP `initialize` payload.
     this.samplingForwarder = new SamplingForwarder(this.transport);
 
     // 4) Construct the typed tool methods + resource readers.
@@ -417,8 +448,106 @@ class DiffuseCraftClientImpl implements DiffuseCraftClient {
         : new ConnectionError(`transport connect failed: ${String(err)}`);
     }
 
+    // J.2 — replace the transport's placeholder `serverCapabilities`
+    // (HTTP / stdio return a stub from the standard MCP `initialize`
+    // response, design.md §3) with a real read of
+    // `diffusecraft://server/info` (resource catalog manifest at
+    // `libs/mcp-tools/src/resources/manifest.ts:38`).
+    //
+    // The handshake placeholder is stored first so a failed read does
+    // not leave `capabilities.server` null — connect() succeeds with
+    // best-available capabilities even when the server-info resource is
+    // unreachable. The read is bounded by the SDK's request timeout
+    // (configured at the transport layer) and by `connect()`'s own
+    // surrounding error path.
     this.serverCapabilities = handshake.serverCapabilities;
+    await this.populateServerCapabilitiesFromInfo();
+
     this.bus.markStatus("connected");
+  }
+
+  /**
+   * Best-effort read of `diffusecraft://server/info` (J.2 / FR-32). On
+   * success, projects the {@link ServerInfo} payload into the catalog's
+   * {@link ServerCapabilities} shape and replaces the placeholder
+   * stored in {@link serverCapabilities}. On failure, logs a warning
+   * and leaves the placeholder intact — `connect()` does NOT fail when
+   * the resource is unavailable (the consumer still has a usable
+   * client; only the negotiated capability surface degrades).
+   *
+   * Known upstream gap: the server does not yet register a resource
+   * resolver for `diffusecraft://server/info`
+   * (`libs/server/src/lib/server.ts:726+` registers history / undo /
+   * redo only). The catalog manifest declares the URI, but the
+   * `RESOURCE_NOT_FOUND` thrown by the in-memory transport (and the
+   * equivalent MCP error from HTTP / stdio) is the runtime symptom
+   * until the resource handler ships in the `server-architecture`
+   * spec. The placeholder snapshot already covers
+   * the consumer-observable shape (`catalog_version_range`,
+   * `comfyui_status`, `supported_workspaces`, `sampling_supported`,
+   * `audit_log_enabled` — all populated with safe defaults), so the
+   * client surface stays type-correct in the meantime.
+   *
+   * Additionally, the {@link ServerInfo} schema does NOT carry every
+   * field declared on {@link ServerCapabilities}: it lacks
+   * `supported_workspaces` and `sampling_supported`. The projection
+   * below preserves the placeholder values for those fields when they
+   * are not present on the read payload — a forward-compatible merge
+   * so a future server that DOES populate them lights up the slot
+   * automatically.
+   */
+  private async populateServerCapabilitiesFromInfo(): Promise<void> {
+    let raw: unknown;
+    try {
+      raw = await this.transport.readResource("diffusecraft://server/info");
+    } catch (err) {
+      this.logger.warn(
+        { err },
+        "DiffuseCraftClient: failed to read diffusecraft://server/info — keeping handshake placeholder capabilities",
+      );
+      return;
+    }
+
+    const payload = extractResourcePayload(raw);
+    if (payload === undefined) {
+      this.logger.warn(
+        { raw_shape: typeof raw },
+        "DiffuseCraftClient: server/info payload unrecognised — keeping handshake placeholder capabilities",
+      );
+      return;
+    }
+
+    // Try the most specific shape first: a full `ServerCapabilities`
+    // object. Older / forward-compatible servers may decide to inline
+    // the negotiated capabilities directly under the resource URI; we
+    // accept that shape so the migration path is one-step.
+    const directCaps = ServerCapabilities.safeParse(payload);
+    if (directCaps.success) {
+      this.serverCapabilities = directCaps.data;
+      return;
+    }
+
+    // Standard shape: a `ServerInfo` payload. Project the overlapping
+    // fields onto `ServerCapabilities` and preserve the placeholder
+    // for `supported_workspaces` / `sampling_supported` (not carried
+    // by `ServerInfo` today — see method docstring).
+    const info = ServerInfo.safeParse(payload);
+    if (info.success) {
+      const placeholder = this.serverCapabilities;
+      this.serverCapabilities = {
+        catalog_version_range: info.data.catalog_version_range,
+        comfyui_status: info.data.comfyui_status,
+        supported_workspaces: placeholder?.supported_workspaces ?? [],
+        sampling_supported: placeholder?.sampling_supported ?? false,
+        audit_log_enabled: info.data.audit_log_enabled,
+      };
+      return;
+    }
+
+    this.logger.warn(
+      { issues: info.error.issues, fallback: directCaps.error.issues },
+      "DiffuseCraftClient: server/info payload failed schema validation — keeping handshake placeholder capabilities",
+    );
   }
 
   async disconnect(): Promise<void> {
@@ -493,13 +622,40 @@ class DiffuseCraftClientImpl implements DiffuseCraftClient {
 // ---------------------------------------------------------------------------
 
 /**
+ * Extra wiring threaded into `buildTransport` from the client class.
+ * Held separately from `ClientConfig` because the values close over the
+ * client instance (specifically the {@link SamplingForwarder} reference)
+ * which only exists after the transport has been constructed. The thunks
+ * are invoked lazily — at handshake time — so the forwarder is fully
+ * wired by the time the transport reads them.
+ */
+interface BuildTransportExtras {
+  /**
+   * Live read of `forwarder.supportsSampling` for J.1 / design.md §10.3.
+   * Returns `true` when the consumer has registered a sampling handler;
+   * `false` otherwise. The HTTP transport re-evaluates this on every
+   * reconnect attempt so a handler attached after the initial `connect()`
+   * is observed by the next handshake.
+   */
+  getSupportsSampling: () => boolean;
+}
+
+/**
  * Branch on `config.transport.kind` and return the matching concrete
  * {@link Transport}. The factory uses this once during construction;
  * subsequent reconnect-on-failure logic lives inside the transport
  * itself (HTTP only, B.4) — the client class never re-builds a
  * transport.
+ *
+ * Threads `clientCapabilities` and the live sampling-state getter
+ * (J.1, design.md §10.3) into the wire-bound transports. The in-memory
+ * transport ignores both — its handshake is in-process and does not
+ * cross an MCP `initialize` boundary.
  */
-function buildTransport(config: ClientConfig): Transport {
+function buildTransport(
+  config: ClientConfig,
+  extras: BuildTransportExtras,
+): Transport {
   const t = config.transport;
   switch (t.kind) {
     case "in-memory":
@@ -508,6 +664,8 @@ function buildTransport(config: ClientConfig): Transport {
       return new StdioTransport({
         command: t.command,
         args: t.args ?? [],
+        clientCapabilities: config.capabilities,
+        getSupportsSampling: extras.getSupportsSampling,
       });
     case "http": {
       const reconnect = config.reconnect;
@@ -515,6 +673,8 @@ function buildTransport(config: ClientConfig): Transport {
         url: t.url,
         token: t.token,
         request_timeout_ms: config.request_timeout_ms,
+        clientCapabilities: config.capabilities,
+        getSupportsSampling: extras.getSupportsSampling,
         reconnect: {
           enabled: reconnect.enabled,
           max_attempts: reconnect.max_attempts,
@@ -532,4 +692,64 @@ function buildTransport(config: ClientConfig): Transport {
       );
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Resource payload extraction (J.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalise an MCP `readResource` response into the underlying resource
+ * payload. The MCP wire shape returned by HTTP / stdio transports is:
+ *
+ * ```
+ * { contents: [{ uri, mimeType?, text?, blob? }, ...] }
+ * ```
+ *
+ * with the actual payload encoded in `text` (typically JSON) or `blob`
+ * (base64 bytes). The in-memory transport short-circuits this and
+ * returns the raw payload object directly. This helper accepts BOTH
+ * shapes:
+ *
+ *   - A plain object → returned verbatim (in-memory case).
+ *   - A `{ contents: [{ text }] }` object → JSON-parses the first
+ *     content's `text` field.
+ *   - Anything else → returns `undefined` so callers can log and fall
+ *     back to the placeholder.
+ *
+ * Returning `undefined` (rather than throwing) lets callers log a
+ * structured warning without unwinding `connect()` — the spec contract
+ * for J.2 is "log but don't fail connect".
+ */
+function extractResourcePayload(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object") return undefined;
+
+  // MCP wire shape: `{ contents: [{ text, ... }] }`.
+  const candidate = raw as { contents?: unknown };
+  if (Array.isArray(candidate.contents)) {
+    const first = candidate.contents[0];
+    if (
+      first !== null &&
+      typeof first === "object" &&
+      typeof (first as { text?: unknown }).text === "string"
+    ) {
+      try {
+        return JSON.parse((first as { text: string }).text);
+      } catch {
+        // Non-JSON text is unexpected for the server/info resource;
+        // signal "unrecognised" so the caller falls back gracefully.
+        return undefined;
+      }
+    }
+    // Some servers may return structured content directly without a
+    // `text` wrapper. Pass that first item through verbatim.
+    if (first !== null && typeof first === "object") {
+      return first;
+    }
+    return undefined;
+  }
+
+  // In-memory transport short-circuit: the resource resolver returns
+  // the raw payload object directly. Pass it through.
+  return raw;
 }
