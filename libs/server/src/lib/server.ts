@@ -122,7 +122,12 @@ import { SUPPORTED_CATALOG_VERSION } from './catalog/types.js';
 import type { CatalogManifest } from './catalog/types.js';
 import { assertUndoRedoConformance } from './conformance/undo-redo-conformance.js';
 
-import type { DiffuseCraftServer, McpInterface, PairingInterface } from '../public-api.js';
+import type {
+  DiffuseCraftServer,
+  EventsInterface,
+  McpInterface,
+  PairingInterface,
+} from '../public-api.js';
 import { newId } from './id.js';
 
 interface ServerInternals {
@@ -318,6 +323,28 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
         },
       }),
       readResource: (uri) => this.requireInternals().transports.inMemory.readResource(uri),
+    };
+  }
+
+  // ---- events namespace ----------------------------------------------------
+
+  /**
+   * Public events surface (`client-sdk` FR-9). Delegates to the internal
+   * {@link EventBus.subscribe} so in-process callers — the SDK's in-memory
+   * transport, MeshCraft, integration tests — can attach handlers without
+   * reaching into private internals.
+   *
+   * Subscriptions taken before {@link DiffuseCraftServerImpl.start} resolve
+   * fail with the same `"server not started"` invariant that `mcp` uses,
+   * because the event bus is constructed during bootstrap. Callers wire
+   * subscriptions after `start()` returns.
+   */
+  get events(): EventsInterface {
+    return {
+      subscribe: <E extends string>(
+        name: E,
+        handler: (payload: unknown) => void,
+      ): Unsubscribe => this.requireInternals().bus.subscribe(name, handler),
     };
   }
 

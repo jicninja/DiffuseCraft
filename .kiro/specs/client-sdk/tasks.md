@@ -18,7 +18,7 @@
 
 ## Phase B — Transports
 
-- [ ] **B.1** In-memory transport: accepts `DiffuseCraftServer`, calls `.mcp.invokeTool` / `.readResource` / `.events.subscribe` directly. No reconnect logic. **(S)**
+- [x] **B.1** In-memory transport: accepts `DiffuseCraftServer`, calls `.mcp.invokeTool` / `.readResource` / `.events.subscribe` directly. No reconnect logic. **(S)**
 - [ ] **B.2** stdio transport: spawn child process via `child_process.spawn`; pipe stdin/stdout per MCP spec; SIGTERM on dispose. **(M)**
 - [ ] **B.3** HTTP transport: integrate `@modelcontextprotocol/sdk/client/streamableHttp`; bearer token in headers; long-lived event channel. **(L)**
 - [ ] **B.4** HTTP reconnector with exponential backoff. Replays in-flight requests; resubscribes events; re-issues handshake. **(M)**

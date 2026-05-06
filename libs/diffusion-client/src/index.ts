@@ -22,6 +22,14 @@ export type {
 } from "./transports";
 
 /**
+ * In-memory transport (FR-9, B.1). Hosts that own the server in-process
+ * (MeshCraft, integration tests, the `client-state-architecture` test
+ * harness) construct this directly and pass it to the eventual
+ * `createDiffuseCraftClient` (Phase B.6).
+ */
+export { InMemoryTransport, createInMemoryTransport } from "./transports";
+
+/**
  * Type re-exports from `@diffusecraft/mcp-tools` (requirements §3.1 FR-3,
  * design.md §3). Consumers can call typed SDK methods without taking a
  * direct dependency on the catalog package.

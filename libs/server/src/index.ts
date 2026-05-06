@@ -16,6 +16,7 @@ export { createDiffuseCraftServer } from './lib/server.js';
 
 export type {
   DiffuseCraftServer,
+  EventsInterface,
   McpInterface,
   Unsubscribe,
 } from './public-api.js';
