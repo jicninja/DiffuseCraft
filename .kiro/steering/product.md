@@ -51,6 +51,7 @@ It runs entirely on local hardware via [ComfyUI](https://github.com/comfyanonymo
 - **Not vendor-agent specific.** Does not privilege any AI agent vendor.
 - **Not phone-first.** Phones are a degraded fallback in v1, not the primary surface.
 - **Not on-device inference.** The tablet/phone never runs a diffusion model. All inference happens on a paired server (a PC, MeshCraft, or any host running `@diffusecraft/server`). The tablet is input + display only.
+- **Not a vector editor.** The document is **raster-only, always.** No vector layer type, no SVG primitives, no resolution-independent shapes, no live filter graph. Vector-shaped operations (shape tools, text, SVG/PDF imports) rasterize on commit. See P28 (`principles.md`).
 
 ## Distribution model
 

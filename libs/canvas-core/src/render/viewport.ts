@@ -97,3 +97,46 @@ export const documentToViewport = (
   const ry = sx * sin + sy * cos;
   return { x: rx + pan_x, y: ry + pan_y };
 };
+
+/**
+ * Inverse of the on-screen CanvasView transform. Maps a gesture point
+ * (in the gesture-detector view's local coordinates) to document
+ * coordinates, accounting for the layout-fit, viewport pan/zoom/rotation,
+ * and the document-center pivot used by the renderer.
+ *
+ * Forward (what the renderer applies):
+ *   P_screen = layoutCenter
+ *            + pan * scaleToFit
+ *            + R(theta) * S(scaleToFit * zoom) * (P_doc - docCenter)
+ * where:
+ *   scaleToFit = min(layoutW / docW, layoutH / docH)
+ *
+ * Use this from gesture callbacks. Marked `'worklet'` so it can be invoked
+ * directly from a Reanimated worklet (e.g., the brush onUpdate hot path)
+ * without crossing back to the JS thread; the same body also runs as a
+ * normal JS function when called from the JS thread.
+ */
+export const screenToDocument = (
+  layout: { width: number; height: number },
+  doc: { width: number; height: number },
+  viewport: Viewport,
+  point: { x: number; y: number },
+): { x: number; y: number } => {
+  'worklet';
+  const scaleToFit = Math.min(layout.width / doc.width, layout.height / doc.height);
+  const totalScale = scaleToFit * viewport.zoom;
+  if (!Number.isFinite(totalScale) || totalScale === 0) {
+    return { x: 0, y: 0 };
+  }
+  const px = point.x - layout.width / 2 - viewport.pan_x * scaleToFit;
+  const py = point.y - layout.height / 2 - viewport.pan_y * scaleToFit;
+  const theta = (-viewport.rotation_degrees * Math.PI) / 180;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  const rx = px * cos - py * sin;
+  const ry = px * sin + py * cos;
+  return {
+    x: rx / totalScale + doc.width / 2,
+    y: ry / totalScale + doc.height / 2,
+  };
+};

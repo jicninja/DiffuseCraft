@@ -1,19 +1,32 @@
 /**
  * useViewport — manages viewport state for the Editor canvas.
  *
- * Per design §4.4 (Q2): viewport lives in component-local state, NOT in
- * Zustand, because it changes at gesture frequency (60 Hz). A `useRef`
- * holds the live value mutated during gestures (no re-render), and a
- * `useState` holds the committed value that triggers React re-renders
- * when a gesture ends or a button is pressed.
+ * Per design §4.4 (Q2): viewport changes at gesture frequency (60 Hz) and
+ * MUST NOT trip a React re-render or a Zustand mutation per frame.
  *
- * All viewport mutations use pure helpers from `@diffusecraft/canvas-core`
- * (`zoomBy`, `panBy`, `rotateBy`, `identityViewport`).
+ * Two storage tiers:
+ *   - `shared`    : `SharedValue<Viewport>` — the live value mutated during
+ *                   gestures and read by `<Group transform>` via JSI on the
+ *                   UI thread, so RN-Skia repaints on the GPU thread without
+ *                   engaging React.
+ *   - `committed` : React state — only updated on gesture release or button
+ *                   press. Drives `<ZoomControls>` (the "100%" indicator)
+ *                   and any other consumer that needs a stable identity.
+ *
+ * Per `feedback_skia_api_versions`: every gesture in this folder runs with
+ * `.runOnJS(true)`, so the gesture callbacks mutate `shared.value` from the
+ * JS thread; RN-Skia subscribes via JSI and repaints regardless of which
+ * thread wrote the value.
+ *
+ * `ref` is a compat getter shim for code that still reads `viewport.ref.current`
+ * (notably `useToolGestures` for hit-testing). Reading `ref.current` returns
+ * the current `shared.value`.
  *
  * Requirements: FR-19, FR-20, FR-21, FR-39, FR-40, FR-41, FR-42
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { useSharedValue } from 'react-native-reanimated';
 import {
   identityViewport,
   zoomBy,
@@ -29,68 +42,87 @@ const ZOOM_STEP = 1.25;
 const FIT_PADDING = 32;
 
 export function useViewport(document: Document | null) {
-  const ref = useRef<Viewport>(identityViewport());
+  const shared = useSharedValue<Viewport>(identityViewport());
+  // Live layout dimensions of the gesture-detector view. Tool gestures
+  // need this to invert the renderer transform (screen → document) — the
+  // renderer pivots around `layoutCenter` and applies a `scaleToFit` factor
+  // derived from layout vs document size, so the inverse must know layout.
+  // Worklet-readable so the brush hot path can use it without crossing
+  // threads.
+  const layoutSV = useSharedValue<{ width: number; height: number } | null>(null);
   const [committed, setCommitted] = useState<Viewport>(identityViewport);
   const adapterRef = useRef<SkiaRenderAdapter | null>(null);
 
-  /**
-   * Called at gesture frequency (60 Hz) — mutates the ref only, no
-   * React re-render. The gesture compositor feeds viewport deltas here
-   * so the Skia adapter can read `ref.current` for smooth rendering.
-   */
-  const updateDuringGesture = useCallback(
-    (updater: (v: Viewport) => Viewport) => {
-      ref.current = updater(ref.current);
-    },
-    [],
+  // Compat shim for hit-testing call sites that read `viewport.ref.current`.
+  // Returns the live SharedValue — same semantics as the previous useRef.
+  const ref = useMemo(
+    () => ({
+      get current(): Viewport {
+        return shared.value;
+      },
+    }),
+    [shared],
   );
 
   /**
-   * Called on gesture end — copies the ref value into React state,
-   * triggering a re-render so `<CanvasView>` receives the final viewport.
+   * Called at gesture frequency (60 Hz) — mutates the SharedValue only.
+   * RN-Skia's `<Group>` repaints via its JSI subscription; React is not
+   * notified.
+   */
+  const updateDuringGesture = useCallback(
+    (updater: (v: Viewport) => Viewport) => {
+      shared.value = updater(shared.value);
+    },
+    [shared],
+  );
+
+  /**
+   * Called on gesture end — copies the live viewport into React state so
+   * consumers like `<ZoomControls>` reflect the final value.
    */
   const commit = useCallback(() => {
-    setCommitted({ ...ref.current });
-  }, []);
+    setCommitted({ ...shared.value });
+  }, [shared]);
 
   /** FR-39: Zoom in by ×1.25. */
   const zoomIn = useCallback(() => {
-    ref.current = zoomBy(ref.current, ZOOM_STEP);
-    commit();
-  }, [commit]);
+    const next = zoomBy(shared.value, ZOOM_STEP);
+    shared.value = next;
+    setCommitted({ ...next });
+  }, [shared]);
 
   /** FR-40: Zoom out by ÷1.25. */
   const zoomOut = useCallback(() => {
-    ref.current = zoomBy(ref.current, 1 / ZOOM_STEP);
-    commit();
-  }, [commit]);
+    const next = zoomBy(shared.value, 1 / ZOOM_STEP);
+    shared.value = next;
+    setCommitted({ ...next });
+  }, [shared]);
 
   /** FR-41: Reset viewport to identity (100%, no pan, no rotation). */
   const resetZoom = useCallback(() => {
-    ref.current = identityViewport();
-    commit();
-  }, [commit]);
+    const next = identityViewport();
+    shared.value = next;
+    setCommitted(next);
+  }, [shared]);
 
   /**
    * FR-42: Fit the document within the available container area with
-   * padding. Without a measured container size we use the document
-   * dimensions to compute a scale that keeps the full document visible.
-   * A real container measurement can be wired later via `onLayout`.
+   * padding. Without measured dimensions, falls back to identity so the
+   * document fills the viewport at 1:1.
    */
   const fitToView = useCallback(
     (containerWidth?: number, containerHeight?: number) => {
       if (!document) return;
 
-      // When container dimensions are not provided, reset to identity as a
-      // safe fallback — the document fills the viewport at 1:1.
       if (
         containerWidth === undefined ||
         containerHeight === undefined ||
         containerWidth <= 0 ||
         containerHeight <= 0
       ) {
-        ref.current = identityViewport();
-        commit();
+        const next = identityViewport();
+        shared.value = next;
+        setCommitted(next);
         return;
       }
 
@@ -101,19 +133,19 @@ export function useViewport(document: Document | null) {
       const scaleY = availableH / document.height;
       const zoom = Math.min(scaleX, scaleY);
 
-      // Center the document in the container.
       const panX = (containerWidth - document.width * zoom) / 2;
       const panY = (containerHeight - document.height * zoom) / 2;
 
-      ref.current = {
+      const next: Viewport = {
         zoom,
         pan_x: panX,
         pan_y: panY,
         rotation_degrees: 0,
       };
-      commit();
+      shared.value = next;
+      setCommitted(next);
     },
-    [document, commit],
+    [document, shared],
   );
 
   /** Store the SkiaRenderAdapter ref for hit-testing from gesture handlers. */
@@ -121,14 +153,22 @@ export function useViewport(document: Document | null) {
     adapterRef.current = adapter;
   }, []);
 
-  // Memoize the return object so consumers (gesture compositor, effects)
-  // see a stable identity. Without this, every render of the Editor would
-  // produce a fresh `viewport` object, causing downstream callbacks and
-  // gestures to be rebuilt at gesture frequency (60 Hz) — and triggering
-  // `useEffect` cleanups in CanvasView that tear down the offscreen surface
-  // mid-stroke.
+  /**
+   * Push the latest layout of the gesture-detector view into `layoutSV`.
+   * Called from CanvasArea's outer `<View onLayout>` so the value matches
+   * the coordinate space of gesture event `(e.x, e.y)` deliveries.
+   */
+  const onLayoutChange = useCallback(
+    (width: number, height: number) => {
+      layoutSV.value = { width, height };
+    },
+    [layoutSV],
+  );
+
   return useMemo(
     () => ({
+      shared,
+      layoutSV,
       ref,
       committed,
       adapterRef,
@@ -139,8 +179,12 @@ export function useViewport(document: Document | null) {
       resetZoom,
       fitToView,
       setAdapter,
+      onLayoutChange,
     }),
     [
+      shared,
+      layoutSV,
+      ref,
       committed,
       updateDuringGesture,
       commit,
@@ -149,6 +193,7 @@ export function useViewport(document: Document | null) {
       resetZoom,
       fitToView,
       setAdapter,
+      onLayoutChange,
     ],
   );
 }

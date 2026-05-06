@@ -43,7 +43,6 @@
  */
 
 import type { Document, Layer, Viewport } from '@diffusecraft/canvas-core';
-import { identityViewport } from '@diffusecraft/canvas-core';
 import {
   Canvas,
   Fill,
@@ -52,17 +51,40 @@ import {
   Rect,
   type SkImage,
 } from '@shopify/react-native-skia';
+
+/**
+ * Local alias for the subset of RN-Skia's `Transforms3d` that this
+ * component actually emits. RN-Skia's public type lives in a deeply
+ * re-exported file (`skia/types/Matrix4`) that some workspace setups do
+ * not surface through the package root; declaring the shape locally
+ * avoids depending on that re-export chain. The runtime contract is
+ * identical — RN-Skia accepts an array of single-key transform records.
+ */
+type GroupTransform = Array<
+  | { translateX: number }
+  | { translateY: number }
+  | { scale: number }
+  | { rotate: number }
+>;
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { View, type LayoutChangeEvent, type ViewStyle } from 'react-native';
-import type { SharedValue } from 'react-native-reanimated';
+import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
 
 import { SkiaRenderAdapter, type SkiaRenderAdapterOptions } from './adapter';
 
 export interface CanvasViewProps {
   /** Active document. Pass null to render an empty surface. */
   document: Document | null;
-  /** Current viewport. Defaults to identity. */
-  viewport?: Viewport;
+  /**
+   * Live viewport on the UI thread. RN-Skia subscribes to the SharedValue
+   * via JSI and repaints on the GPU thread when its value changes — no
+   * React re-render is involved during pan / zoom / rotate gestures.
+   *
+   * The transform is derived from `(layout, document, viewport.value)` via
+   * `useDerivedValue`, so it also reactively re-emits on layout changes
+   * (re-render) and viewport mutations (UI-thread reactive).
+   */
+  viewport: SharedValue<Viewport>;
   /** Resolve raw bytes for a content_blob_id. */
   loadBytes: SkiaRenderAdapterOptions['loadBytes'];
   /** Container style. */
@@ -83,27 +105,11 @@ export interface CanvasViewProps {
 }
 
 /**
- * Compute transform to fit document within layout with viewport applied.
- *
- * Pure function of `(layout, doc, viewport)`. Recomputed on layout or
- * viewport change; the layer chain underneath does not re-render because
- * the transform is applied on a single `<Group>` whose children consume
- * SharedValues for their pixel data.
+ * Identity transforms3d — used when layout / document are not yet known.
+ * Returning a stable empty array keeps `<Group transform>` valid and
+ * paint-safe before first layout.
  */
-function computeDocTransform(
-  layout: { width: number; height: number },
-  doc: { width: number; height: number },
-  vp: Viewport,
-) {
-  const scaleToFit = Math.min(layout.width / doc.width, layout.height / doc.height);
-  const offsetX = (layout.width - doc.width * scaleToFit) / 2;
-  const offsetY = (layout.height - doc.height * scaleToFit) / 2;
-  const totalScale = scaleToFit * vp.zoom;
-  const tx = offsetX + vp.pan_x * scaleToFit;
-  const ty = offsetY + vp.pan_y * scaleToFit;
-
-  return { totalScale, tx, ty, rotation: vp.rotation_degrees };
-}
+const IDENTITY_TRANSFORM: GroupTransform = [];
 
 /**
  * Visible paint layers ordered bottom-to-top (lowest `position` first), so
@@ -167,13 +173,50 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
     setLayout({ width, height });
   };
 
-  const vp = viewport ?? identityViewport();
   const docWidth = document?.width ?? 0;
   const docHeight = document?.height ?? 0;
 
-  const transform = layout && docWidth > 0 && docHeight > 0
-    ? computeDocTransform(layout, { width: docWidth, height: docHeight }, vp)
-    : null;
+  // Reactive transform: re-emits on any of:
+  //   - viewport.value mutations (UI-thread reactive subscription)
+  //   - layout / document size changes (closure rebinds on re-render)
+  // RN-Skia's `<Group transform>` subscribes to this SharedValue via JSI
+  // and repaints on the GPU thread without engaging React.
+  //
+  // Composition (right-to-left, applied to a document-space point P):
+  //   1. Translate doc center to origin:           [translate(-docCenter)]
+  //   2. Apply zoom (scaleToFit baked in):         [scale(totalScale)]
+  //   3. Rotate around origin:                     [rotate(theta)]
+  //   4. Translate to layout center + viewport pan: [translate(layoutCenter + pan*scaleToFit)]
+  //
+  // This makes pinch zoom and rotation pivot around the layout center —
+  // a sensible default for tablet UX. Pan is in canvas pixels (the same
+  // units as the document), scaled by `scaleToFit` so pan magnitudes feel
+  // consistent across documents of different sizes.
+  const transform = useDerivedValue<GroupTransform>(() => {
+    if (!layout || docWidth <= 0 || docHeight <= 0) {
+      return IDENTITY_TRANSFORM;
+    }
+    const v = viewport.value;
+    const scaleToFit = Math.min(layout.width / docWidth, layout.height / docHeight);
+    const totalScale = scaleToFit * v.zoom;
+    const layoutCenterX = layout.width / 2;
+    const layoutCenterY = layout.height / 2;
+    const docCenterX = docWidth / 2;
+    const docCenterY = docHeight / 2;
+    const tx = layoutCenterX + v.pan_x * scaleToFit;
+    const ty = layoutCenterY + v.pan_y * scaleToFit;
+    const theta = (v.rotation_degrees * Math.PI) / 180;
+    return [
+      { translateX: tx },
+      { translateY: ty },
+      { rotate: theta },
+      { scale: totalScale },
+      { translateX: -docCenterX },
+      { translateY: -docCenterY },
+    ];
+  }, [layout?.width, layout?.height, docWidth, docHeight]);
+
+  const hasContent = !!layout && docWidth > 0 && docHeight > 0 && !!document;
 
   // Memoize the visible-paint-layers list so the JSX iteration receives a
   // stable array unless `document.layers` actually changes. Each iteration
@@ -197,15 +240,19 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
 
         {/* Document-space content: paper + per-layer image chain + the
             in-progress stroke overlay. The viewport transform is applied
-            once on the surrounding <Group> so changes to pan / zoom /
-            rotation do not invalidate any committed pixel data. */}
-        {transform && document && (
+            once on the surrounding <Group> via a SharedValue<Transforms3d>
+            — RN-Skia subscribes via JSI and repaints on the GPU thread
+            when viewport or layout changes, with no React re-render. */}
+        {hasContent && document && (
           <Group
-            transform={[
-              { translateX: transform.tx },
-              { translateY: transform.ty },
-              { scale: transform.totalScale },
-            ]}
+            transform={
+              // SharedValue<GroupTransform> passed where RN-Skia's `SkiaProps`
+              // accepts a reactive prop. Same cast pattern used below for
+              // `image={... as unknown as SkImage}` — RN-Skia detects the
+              // `.value` property via JSI and subscribes for repaints. The
+              // structural shape matches RN-Skia's internal `Transforms3d`.
+              transform as unknown as GroupTransform
+            }
           >
             {/* Document paper — the white rectangle every editor renders
                 beneath the layer stack. */}

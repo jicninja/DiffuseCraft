@@ -18,8 +18,11 @@
  * strokes are routed to the mask painting pipeline (maskOnly flag on
  * composeStroke).
  *
- * Coordinates are converted from screen (viewport) space to document space
- * via `viewportToDocument` from `canvas-core`.
+ * Coordinates are converted from screen (gesture-detector view) space to
+ * document space via `screenToDocument` from `canvas-core`, which inverts
+ * the full renderer transform (layout-fit + viewport pan/zoom/rotation +
+ * doc-center pivot). The brush worklet inlines the same math against
+ * snapshots taken at gesture begin to stay on the UI thread.
  *
  * Requirements: FR-1, FR-2, FR-4, FR-9, FR-10, FR-13, FR-14, FR-16, FR-17,
  *               FR-18, FR-19, FR-20, FR-22, FR-23, FR-24, FR-25, FR-26,
@@ -39,7 +42,7 @@ import {
   type EditorStore,
 } from '@diffusecraft/core';
 import {
-  viewportToDocument,
+  screenToDocument,
   BRUSH_PRESETS,
   closeLassoPath,
   findSnapTargets,
@@ -63,7 +66,7 @@ import type { BrushPipelineHandle, BeginStrokeConfig } from './useBrushPipeline'
  */
 type ViewportHandle = Pick<
   ReturnType<typeof useViewport>,
-  'ref' | 'adapterRef'
+  'ref' | 'adapterRef' | 'layoutSV'
 >;
 
 export function useToolGestures(
@@ -116,11 +119,58 @@ export function useToolGestures(
   }
   const skipStrokeSV = skipStrokeSVRef.current;
 
+  // Layout + document-size snapshots for the brush worklet's screen→doc
+  // inverse. Frozen at gesture begin alongside `viewportSV`. The renderer
+  // pivots around layoutCenter and applies a `scaleToFit` derived from
+  // both — without these snapshots the worklet has no way to invert the
+  // transform on the UI thread.
+  const layoutSnapshotSVRef = useRef<SharedValue<{ width: number; height: number } | null> | null>(
+    null,
+  );
+  if (layoutSnapshotSVRef.current === null) {
+    layoutSnapshotSVRef.current = makeMutable<{ width: number; height: number } | null>(null);
+  }
+  const layoutSnapshotSV = layoutSnapshotSVRef.current;
+
+  const docSizeSVRef = useRef<SharedValue<{ width: number; height: number } | null> | null>(null);
+  if (docSizeSVRef.current === null) {
+    docSizeSVRef.current = makeMutable<{ width: number; height: number } | null>(null);
+  }
+  const docSizeSV = docSizeSVRef.current;
+
   // ---- Helpers ----
 
-  /** Convert a screen-space gesture point to document space (JS thread). */
-  const toDoc = (vp: Viewport, x: number, y: number) =>
-    viewportToDocument(vp, { x, y });
+  /**
+   * Convert a screen-space gesture point to document space (JS thread).
+   *
+   * Uses the full renderer-inverse math (`screenToDocument`) which accounts
+   * for the layout-fit, viewport pan/zoom/rotation, and the document-center
+   * pivot. The renderer pivots zoom/rotation around the layout center, so a
+   * pure viewport-only inverse (no layout, no doc dims) would mis-place
+   * strokes whenever the document does not exactly fill the gesture-detector
+   * view at 1:1.
+   *
+   * Falls back to the identity mapping when layout / document dimensions are
+   * not yet known (mount race) — better than a NaN-tinted result.
+   */
+  const toDoc = (vp: Viewport, x: number, y: number) => {
+    const layout = viewport.layoutSV.value;
+    const docState = editorStore?.getState().document;
+    if (
+      !layout ||
+      !docState ||
+      docState.width <= 0 ||
+      docState.height <= 0
+    ) {
+      return { x, y };
+    }
+    return screenToDocument(
+      layout,
+      { width: docState.width, height: docState.height },
+      vp,
+      { x, y },
+    );
+  };
 
   /**
    * JS-thread brush-stroke kickoff. Called once at `onBegin` via `runOnJS`.
@@ -130,9 +180,10 @@ export function useToolGestures(
    * internally hops to the UI thread to allocate the expander/renderer and
    * push the first point).
    *
-   * The viewport snapshot also lands in `viewportSV` so subsequent
-   * `onUpdate` worklet bodies can convert screen coords to document coords
-   * inline (see `viewportToDocumentWorklet` below).
+   * The viewport snapshot lands in `viewportSV` and the layout / document
+   * dimensions land in `layoutSnapshotSV` / `docSizeSV` so subsequent
+   * `onUpdate` worklet bodies can invert the renderer transform inline
+   * without crossing the JS bridge.
    */
   const beginBrushStroke = useCallback(
     (firstPoint: StrokePoint) => {
@@ -169,9 +220,13 @@ export function useToolGestures(
       };
 
       // Freeze the viewport for the entire stroke (v1 simplification — see
-      // the SharedValue's comment block above).
+      // the SharedValue's comment block above). Also snapshot the layout
+      // and document dimensions so the worklet can invert the renderer
+      // transform without crossing back to the JS thread.
       const vp = viewport.ref.current;
       viewportSV.value = vp;
+      layoutSnapshotSV.value = viewport.layoutSV.value;
+      docSizeSV.value = { width: doc.width, height: doc.height };
 
       const docFirst = toDoc(vp, firstPoint.x, firstPoint.y);
       const firstDocPoint: StrokePoint = {
@@ -193,7 +248,15 @@ export function useToolGestures(
       strokeActiveSV.value = true;
       brushPipeline.beginStroke(config, firstDocPoint);
     },
-    [editorStore, viewport, brushPipeline, viewportSV, strokeActiveSV],
+    [
+      editorStore,
+      viewport,
+      brushPipeline,
+      viewportSV,
+      strokeActiveSV,
+      layoutSnapshotSV,
+      docSizeSV,
+    ],
   );
 
   // ---- Per-tool gesture builders ----
@@ -254,23 +317,44 @@ export function useToolGestures(
         );
         if (point === null) return;
 
-        // Convert screen → document coords using the gesture-begin viewport
-        // snapshot. Inlined math; `viewportToDocument` from canvas-core is
-        // not yet 'worklet'-marked. The math is identical (see
-        // libs/canvas-core/src/render/viewport.ts).
+        // Convert screen → document coords using snapshots taken at gesture
+        // begin (viewport, layout, document size). Inlined math — must match
+        // `screenToDocument` in `libs/canvas-core/src/render/viewport.ts`,
+        // which is the inverse of the renderer transform composed in
+        // `libs/canvas-skia/src/CanvasView.tsx`. The renderer pivots zoom
+        // and rotation around `layoutCenter` and applies a `scaleToFit`
+        // factor derived from layout vs document size, so the inverse must
+        // do the same.
         const vp = viewportSV.value;
+        const layout = layoutSnapshotSV.value;
+        const docSize = docSizeSV.value;
         let docX = point.x;
         let docY = point.y;
-        if (vp !== null) {
-          const tx = point.x - vp.pan_x;
-          const ty = point.y - vp.pan_y;
-          const theta = (-vp.rotation_degrees * Math.PI) / 180;
-          const cos = Math.cos(theta);
-          const sin = Math.sin(theta);
-          const rx = tx * cos - ty * sin;
-          const ry = tx * sin + ty * cos;
-          docX = rx / vp.zoom;
-          docY = ry / vp.zoom;
+        if (
+          vp !== null &&
+          layout !== null &&
+          docSize !== null &&
+          layout.width > 0 &&
+          layout.height > 0 &&
+          docSize.width > 0 &&
+          docSize.height > 0
+        ) {
+          const scaleToFit = Math.min(
+            layout.width / docSize.width,
+            layout.height / docSize.height,
+          );
+          const totalScale = scaleToFit * vp.zoom;
+          if (Number.isFinite(totalScale) && totalScale !== 0) {
+            const px = point.x - layout.width / 2 - vp.pan_x * scaleToFit;
+            const py = point.y - layout.height / 2 - vp.pan_y * scaleToFit;
+            const theta = (-vp.rotation_degrees * Math.PI) / 180;
+            const cos = Math.cos(theta);
+            const sin = Math.sin(theta);
+            const rx = px * cos - py * sin;
+            const ry = px * sin + py * cos;
+            docX = rx / totalScale + docSize.width / 2;
+            docY = ry / totalScale + docSize.height / 2;
+          }
         }
 
         pushPointWorklet({ ...point, x: docX, y: docY });
@@ -293,6 +377,8 @@ export function useToolGestures(
         }
         skipStrokeSV.value = false;
         viewportSV.value = null;
+        layoutSnapshotSV.value = null;
+        docSizeSV.value = null;
       });
   }, [
     brushPipeline,
@@ -300,6 +386,8 @@ export function useToolGestures(
     viewportSV,
     strokeActiveSV,
     skipStrokeSV,
+    layoutSnapshotSV,
+    docSizeSV,
   ]);
 
   const buildLassoGesture = useCallback((): GestureType => {

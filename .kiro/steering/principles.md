@@ -335,6 +335,29 @@ These rules are enforced by `@nx/enforce-module-boundaries` and fail CI on viola
 
 ---
 
+## P28 — Raster-only canvas; everything is rasterized, always
+
+**Rule.** The DiffuseCraft document model is **raster, full stop.** Every layer, every brush stroke, every imported asset, every generated output, every mask, every control-layer input — stored and rendered as pixels. There is no vector layer type, no SVG primitives, no resolution-independent shapes, no path-based text, no live filter graph that defers rasterization. Operations that produce vector-like results (stroke a path, place text, paste an SVG, import a Figma frame) **must rasterize at the moment they enter the document** at the layer's pixel resolution. Selections and masks are pixel masks. Transforms (move/scale/rotate/skew/perspective) sample pixels and write pixels — they do not retain vector geometry "for later."
+
+**Scope.**
+- **Storage:** layer content is always a pixel buffer (RGBA8 in v1; HDR formats post-v1 if needed). No `kind: "vector"` layer type. No path data persisted in document state.
+- **Tools:** brush, eraser, fill, transform, selection, mask — all operate on pixels. A "shape tool" or "text tool", if it ever ships, **rasterizes on commit**; the in-progress preview may be vector for editing ergonomics, but the moment it lands in a layer it is pixels.
+- **Imports:** SVG, PDF, vector clipboard payloads — rasterize at import time using the canvas's current pixel density. Original vector source is **not** retained by the document.
+- **Diffusion I/O:** ComfyUI exclusively consumes and produces tensors → pixels. The pipeline has no vector path and never will. This principle just makes the canvas-side match what the engine already requires.
+- **Export:** raster formats (PNG, JPEG, WebP, TIFF). SVG/PDF export is **off-roadmap**; if ever added, it would be a flat rasterized embed inside a vector container, not a true vector export.
+
+**Rationale.**
+- **The product is AI image editing.** Diffusion models eat pixels and emit pixels. A vector layer model adds a second source of truth that has to be flattened on every generation, every preview, every export — cost without payoff.
+- **One representation = simpler everything.** Single coordinate system, single resampling story, single undo unit, single MCP `get_layer_content` shape. Agents (P1) reason about pixels uniformly; no "is this layer rasterized yet?" branch in tool code.
+- **Predictability over flexibility.** Vector "edit later" promises rot the moment a stroke is repainted by a generation, a control layer rasterizes a sketch, or a region mask is refined. Committing to raster up front removes the trap.
+- **Scope discipline.** P25 (no half-finished). A half-supported vector path is worse than no vector path. v1 ships pixels.
+
+**Non-goals.** This is not a statement about the *tool's* internal representation while it's previewing (a brush stroke can be a path until commit); it's about what the **document** stores and what every other subsystem sees. Once an operation lands, it's pixels.
+
+**Reference.** `product.md` ("What DiffuseCraft is NOT"); `canvas-core` storage spec; `tech.md` ("Canvas pipeline"). Cross-checked in every editor spec (`canvas-fundamentals`, `selection-tools`, `mask-system`, `brush-system`, `transform-tools`, `control-layers`, `regions`).
+
+---
+
 ## Tiebreaker order
 
 When two principles conflict, the one with the lower number wins. Examples:

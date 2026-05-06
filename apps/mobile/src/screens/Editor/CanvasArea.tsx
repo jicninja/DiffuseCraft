@@ -137,13 +137,31 @@ export function CanvasArea({ document }: CanvasAreaProps) {
     [viewport],
   );
 
+  /**
+   * Forward the gesture-detector view's layout into `viewport.layoutSV` so
+   * tool gestures can invert the renderer transform (screen → document).
+   * The renderer pivots zoom/rotation around the layout center and applies
+   * a `scaleToFit` factor — the inverse needs both. The view we measure is
+   * the same view that delivers `(e.x, e.y)` in gesture events, so the
+   * coordinate space matches.
+   */
+  const handleGestureViewLayout = useCallback(
+    (e: { nativeEvent: { layout: { width: number; height: number } } }) => {
+      viewport.onLayoutChange(
+        e.nativeEvent.layout.width,
+        e.nativeEvent.layout.height,
+      );
+    },
+    [viewport],
+  );
+
   return (
     <View className="flex-1">
       <GestureDetector gesture={gesture}>
-        <View className="flex-1">
+        <View className="flex-1" onLayout={handleGestureViewLayout}>
           <CanvasView
             document={document}
-            viewport={viewport.committed}
+            viewport={viewport.shared}
             loadBytes={loadBytes}
             className="flex-1"
             onAdapterReady={handleAdapterReady}
