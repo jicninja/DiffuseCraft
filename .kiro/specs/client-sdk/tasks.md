@@ -91,11 +91,13 @@
 
 ## Phase I — MCP sampling
 
-- [ ] **I.1** `SamplingForwarder` class. **(S)**
-- [ ] **I.2** `client.sampling.onSample(handler)` registration. **(XS)**
-- [ ] **I.3** Wire transport to forward sampling requests to the registered handler. **(M)**
-- [ ] **I.4** `SamplingNotSupportedError` when no handler registered and server requests. **(XS)**
-- [ ] **I.5** Tests: server-issued sample → consumer handler invoked → response back. **(M)**
+- [x] **I.1** `SamplingForwarder` class. **(S)**
+- [x] **I.2** `client.sampling.onSample(handler)` registration. **(XS)**
+- [x] **I.3** Wire transport to forward sampling requests to the registered handler. **(M)**
+- [x] **I.4** `SamplingNotSupportedError` when no handler registered and server requests. **(XS)**
+- [x]* **I.5** Tests: server-issued sample → consumer handler invoked → response back. **(M)**
+
+> **I.5 deferred per testing.md.**
 
 ## Phase J — Capability negotiation
 

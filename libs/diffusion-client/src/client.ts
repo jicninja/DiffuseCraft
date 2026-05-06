@@ -1,0 +1,535 @@
+/**
+ * `DiffuseCraftClient` (FR-1 / FR-2, design.md §3) and the
+ * `createDiffuseCraftClient(config)` factory.
+ *
+ * This is the public-API entry point referenced by every story in the
+ * `client-sdk` requirements: consumers (tablet, MeshCraft, agent
+ * integrations, integration tests) call `createDiffuseCraftClient(config)`
+ * to get a fully-assembled client wired against the chosen transport.
+ * The factory composes everything Phases A–H + K shipped — config
+ * validation (A.2/A.3), transports (B.1/B.2/B.3 + B.4 reconnect), the
+ * event bus (E.1–E.3), typed tool methods (C.1+), typed resource
+ * readers (D.1+), the pairing client (F.1–F.5), image helpers (H.1+H.2),
+ * and the sampling forwarder (Phase I) — into a single typed surface.
+ *
+ * Source of truth:
+ *   - `client-sdk` requirements §3.1 FR-1 + FR-2 (factory + exposed
+ *     surface), §3.10 FR-32 (server-capabilities slot).
+ *   - `client-sdk` design.md §2 (`client.ts` module slot), §3 (Public
+ *     API — `DiffuseCraftClient` interface), §10 (sampling lifecycle).
+ *
+ * Design notes:
+ *
+ *   - **Transport-agnostic at the type level (FR-10).** The client
+ *     depends only on the `Transport` interface; backend selection
+ *     (`http` / `stdio` / `in-memory`) is performed once during
+ *     construction by branching on `config.transport.kind`.
+ *
+ *   - **No runtime import of `@diffusecraft/server`.** The in-memory
+ *     transport accepts an opaque `server` reference and structurally
+ *     narrows it at first use. This file mirrors that boundary —
+ *     `import type` only — so building the client SDK does not require
+ *     the server bundle.
+ *
+ *   - **Connection-status orchestration.** The {@link EventBus} owns
+ *     the connection-status channel (E.3 / FR-21). The client class
+ *     calls `markStatus(...)` from `connect()` (`disconnected` →
+ *     `connecting` → `connected`) and `disconnect()` (→ `disconnected`).
+ *     The HTTP transport's reconnect-loop emissions are bridged
+ *     automatically by the bus when the transport exposes
+ *     `onConnectionStatus(...)` (B.4) — so the client does not have to
+ *     wire reconnect-status forwarding itself.
+ *
+ *   - **Server capabilities are populated from `transport.connect()`.**
+ *     The transports return a {@link HandshakeResult} carrying a
+ *     placeholder `serverCapabilities` (Phase G replaces this with a
+ *     real read of `diffusecraft://server/info` once the resource
+ *     catalog ships). The client stores it on `capabilities.server`
+ *     verbatim so consumers see the canonical shape even pre-Phase G.
+ *
+ *   - **Disposal cascade.** `dispose()` and `disconnect()` both fire
+ *     the same teardown chain: stop the sampling forwarder, dispose the
+ *     event bus, then `transport.disconnect()`. `dispose()` additionally
+ *     marks the client as disposed so further calls throw a clear
+ *     {@link ConnectionError}; `disconnect()` leaves the client
+ *     reusable so a subsequent `connect()` re-establishes the session.
+ */
+
+import type { ServerCapabilities } from "@diffusecraft/mcp-tools";
+
+import type {
+  ClientCapabilities,
+  ClientConfig,
+  Logger,
+} from "./config.js";
+import { parseClientConfig } from "./config.js";
+import { ConnectionError } from "./errors.js";
+import { EventBus } from "./events/index.js";
+import type {
+  ConnectionStatus,
+  ConnectionStatusListener,
+  EventListener,
+  Unsubscribe,
+} from "./events/index.js";
+import { fetchImage, uploadImage } from "./image/index.js";
+import type { UploadImageOptions } from "./image/index.js";
+import { PairingClient } from "./pairing/index.js";
+import { createResourceReaders } from "./resources/index.js";
+import type { TypedResourceReaders } from "./resources/index.js";
+import { SamplingForwarder } from "./sampling/index.js";
+import type { SamplingHandler } from "./sampling/index.js";
+import { createToolMethods } from "./tools/index.js";
+import type { TypedToolMethods } from "./tools/index.js";
+import {
+  HttpTransport,
+  InMemoryTransport,
+  StdioTransport,
+} from "./transports/index.js";
+import type { Transport } from "./transports/index.js";
+import type { ImageEnvelope, ImageFormat } from "@diffusecraft/mcp-tools";
+import type {
+  DiscoverOptions,
+  DiscoveredBackend,
+  ManualPayload,
+  PairResult,
+  QrPayload,
+  RequestPairOptions,
+} from "./pairing/index.js";
+
+// ---------------------------------------------------------------------------
+// Public interface
+// ---------------------------------------------------------------------------
+
+/**
+ * Public client interface (design.md §3, FR-2).
+ *
+ * Returned by {@link createDiffuseCraftClient}. Every consumer-facing
+ * field is typed against the catalog so wrong-shape arguments fail at
+ * compile time (FR-12). Lifecycle methods are awaitable; namespaces
+ * (`tools`, `resources`, `events`, `pairing`, `image`, `sampling`) are
+ * fully populated at construction time so consumers can attach
+ * listeners or invoke methods before `connect()` resolves (the
+ * underlying transport queues until ready).
+ */
+export interface DiffuseCraftClient {
+  /**
+   * Establish the transport connection and complete the MCP
+   * `initialize` handshake. Emits `connecting` → `connected` on the
+   * bus's connection-status channel (FR-21). Throws
+   * {@link ConnectionError} on transport failure; the bus stays at
+   * `disconnected`.
+   */
+  connect(): Promise<void>;
+
+  /**
+   * Tear down the transport connection and emit a final
+   * `disconnected` status. Subsequent `connect()` calls re-establish
+   * the session — `disconnect()` is reversible.
+   */
+  disconnect(): Promise<void>;
+
+  /**
+   * Tear down the client permanently. Disposes the sampling forwarder,
+   * the event bus, the pairing client (no-op today), and the
+   * transport. Subsequent calls on this client reject with
+   * {@link ConnectionError}; consumers should call
+   * {@link createDiffuseCraftClient} to obtain a new instance.
+   */
+  dispose(): Promise<void>;
+
+  /**
+   * Synchronous status projection (design.md §3 — the same enum the
+   * `events.onConnectionStatus(...)` channel emits).
+   */
+  getStatus(): ConnectionStatus;
+
+  /** Typed tool methods, one per catalog tool (FR-11 / FR-12, design §3 / §5). */
+  tools: TypedToolMethods;
+
+  /** Typed resource readers, one namespace per catalog resource (FR-16+, design §3 / §6). */
+  resources: TypedResourceReaders;
+
+  /**
+   * Buffered, typed event subscription bus (FR-19 / FR-20 / FR-21,
+   * design §3 / §7).
+   */
+  events: {
+    on<E extends Parameters<EventBus["on"]>[0]>(
+      name: E,
+      handler: EventListener<E>,
+    ): Unsubscribe;
+    onConnectionStatus(handler: ConnectionStatusListener): Unsubscribe;
+  };
+
+  /** Pairing flow (FR-22…FR-25, design §9). */
+  pairing: {
+    discover(opts?: DiscoverOptions): AsyncIterable<DiscoveredBackend>;
+    requestPair(
+      backend: { url: string },
+      opts?: RequestPairOptions,
+    ): Promise<PairResult>;
+    parseQr(payload: string): QrPayload;
+    parseManual(input: string): ManualPayload;
+  };
+
+  /**
+   * Negotiated capabilities. `client` is what the SDK declared at
+   * construction time (FR-32); `server` is populated from the
+   * handshake result returned by `transport.connect()`. The current
+   * `ServerCapabilities` is a placeholder until Phase G replaces it
+   * with a real read of `diffusecraft://server/info`.
+   */
+  capabilities: {
+    client: ClientCapabilities;
+    server: ServerCapabilities | null;
+  };
+
+  /** Image envelope helpers (FR-34 / FR-35, design §11). */
+  image: {
+    fetch(envelope: ImageEnvelope): Promise<Uint8Array>;
+    upload(
+      bytes: Uint8Array,
+      format: ImageFormat,
+      opts: UploadImageOptions,
+    ): Promise<{ ref: { uri: string } }>;
+  };
+
+  /**
+   * MCP sampling channel (Q3 / design §10). Consumers register a
+   * single handler the SDK forwards every server-initiated sampling
+   * request to; throws {@link import("./errors.js").SamplingNotSupportedError}
+   * when the server requests a sample with no handler attached.
+   */
+  sampling: {
+    onSample(handler: SamplingHandler): Unsubscribe;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Construct a fully-wired {@link DiffuseCraftClient}. The factory:
+ *
+ *   1. Validates `config` via {@link parseClientConfig} — applies
+ *      defaults and throws {@link import("./errors.js").ClientValidationError}
+ *      with a populated `field_path` on the first offending Zod issue.
+ *   2. Constructs the concrete {@link Transport} based on
+ *      `config.transport.kind` (`http` → {@link HttpTransport};
+ *      `stdio` → {@link StdioTransport}; `in-memory` →
+ *      {@link InMemoryTransport}).
+ *   3. Wires an {@link EventBus} against the transport (E.3 — the bus
+ *      auto-bridges the HTTP transport's reconnect-status channel
+ *      when present).
+ *   4. Builds the typed tool methods, resource readers, image helper
+ *      thunks, pairing client, and sampling forwarder.
+ *
+ * The returned client is reusable across multiple `connect()` /
+ * `disconnect()` cycles. Each cycle re-runs the handshake; the
+ * `capabilities.server` slot is replaced on every successful connect
+ * (or cleared back to `null` on disconnect).
+ *
+ * @example
+ * ```ts
+ * const client = createDiffuseCraftClient({
+ *   transport: { kind: "in-memory", server },
+ * });
+ * await client.connect();
+ * const out = await client.tools.getServerInfo({});
+ * await client.dispose();
+ * ```
+ */
+export function createDiffuseCraftClient(config: ClientConfig): DiffuseCraftClient {
+  const validated = parseClientConfig(config);
+  return new DiffuseCraftClientImpl(validated);
+}
+
+// ---------------------------------------------------------------------------
+// Implementation
+// ---------------------------------------------------------------------------
+
+/**
+ * Tiny no-op logger used when the consumer omits `config.logger`.
+ * Matches the no-op slot the EventBus / Pairing client already use so
+ * the SDK has a single fallback shape.
+ */
+const NOOP_LOGGER: Logger = {
+  trace: () => {},
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  fatal: () => {},
+};
+
+class DiffuseCraftClientImpl implements DiffuseCraftClient {
+  private readonly transport: Transport;
+  private readonly bus: EventBus;
+  private readonly samplingForwarder: SamplingForwarder;
+  private readonly pairingClient: PairingClient;
+  private readonly logger: Logger;
+
+  /** Declared client capabilities (FR-32). Frozen so consumers see a stable shape. */
+  private readonly clientCapabilities: ClientCapabilities;
+
+  /**
+   * Server-reported capabilities snapshot. Populated by
+   * {@link connect} from the transport's handshake result; cleared on
+   * {@link disconnect} so re-connect observes a fresh value.
+   */
+  private serverCapabilities: ServerCapabilities | null = null;
+
+  /**
+   * Permanent-disposal flag. Once `dispose()` resolves, public methods
+   * either reject with {@link ConnectionError} (lifecycle methods) or
+   * fall through to safe no-ops (subscribe paths) so consumers holding
+   * a stale reference do not crash.
+   */
+  private disposed = false;
+
+  /** Public namespaces — built once in the constructor. */
+  public readonly tools: TypedToolMethods;
+  public readonly resources: TypedResourceReaders;
+  public readonly events: DiffuseCraftClient["events"];
+  public readonly pairing: DiffuseCraftClient["pairing"];
+  public readonly image: DiffuseCraftClient["image"];
+  public readonly sampling: DiffuseCraftClient["sampling"];
+  public readonly capabilities: DiffuseCraftClient["capabilities"];
+
+  constructor(config: ClientConfig) {
+    this.logger = config.logger ?? NOOP_LOGGER;
+    this.clientCapabilities = config.capabilities;
+
+    // 1) Construct the concrete transport.
+    this.transport = buildTransport(config);
+
+    // 2) Construct the event bus. The bus auto-bridges the HTTP
+    //    transport's reconnect-status channel when present (B.4 / E.3),
+    //    so reconnect transitions reach consumers via
+    //    `events.onConnectionStatus(...)` without extra wiring here.
+    this.bus = new EventBus({
+      transport: this.transport,
+      bufferSize: config.event_buffer_size,
+      logger: this.logger,
+      // Default `bridgeHttpTransport: true` is correct — the bus drives
+      // its own status channel for HTTP reconnects while the client
+      // class handles the connect/disconnect transitions explicitly.
+    });
+
+    // 3) Construct the sampling forwarder. It immediately registers a
+    //    transport-level handler so server-initiated sampling requests
+    //    flow even before a consumer attaches an `onSample` handler
+    //    (the forwarder throws SamplingNotSupportedError in that
+    //    branch — design.md §10.4).
+    this.samplingForwarder = new SamplingForwarder(this.transport);
+
+    // 4) Construct the typed tool methods + resource readers.
+    this.tools = createToolMethods(this.transport);
+    this.resources = createResourceReaders(this.transport);
+
+    // 5) Construct the pairing client with the consumer-supplied mDNS
+    //    adapter (when present) so `client.pairing.discover()` works.
+    //    parseQr / parseManual / requestPair work without an adapter.
+    this.pairingClient = new PairingClient({
+      ...(config.adapters?.mdns ? { mdnsAdapter: config.adapters.mdns } : {}),
+      logger: this.logger,
+    });
+
+    // 6) Wire the public namespaces. The events namespace mirrors the
+    //    bus's typed `on(...)` and `onConnectionStatus(...)` methods so
+    //    consumers see the catalog-typed surface declared in design §3.
+    this.events = {
+      on: <E extends Parameters<EventBus["on"]>[0]>(
+        name: E,
+        handler: EventListener<E>,
+      ): Unsubscribe => this.bus.on(name, handler),
+      onConnectionStatus: (handler: ConnectionStatusListener): Unsubscribe =>
+        this.bus.onConnectionStatus(handler),
+    };
+
+    this.pairing = {
+      discover: (opts?: DiscoverOptions): AsyncIterable<DiscoveredBackend> =>
+        this.pairingClient.discover(opts),
+      requestPair: (
+        backend: { url: string },
+        opts?: RequestPairOptions,
+      ): Promise<PairResult> => this.pairingClient.requestPair(backend, opts),
+      parseQr: (payload: string): QrPayload => this.pairingClient.parseQr(payload),
+      parseManual: (input: string): ManualPayload =>
+        this.pairingClient.parseManual(input),
+    };
+
+    this.image = {
+      fetch: (envelope: ImageEnvelope): Promise<Uint8Array> =>
+        fetchImage(envelope, this.transport),
+      upload: (
+        bytes: Uint8Array,
+        format: ImageFormat,
+        opts: UploadImageOptions,
+      ): Promise<{ ref: { uri: string } }> =>
+        uploadImage(bytes, format, this.transport, opts),
+    };
+
+    this.sampling = {
+      onSample: (handler: SamplingHandler): Unsubscribe =>
+        this.samplingForwarder.onSample(handler),
+    };
+
+    // Bind `self` so the `server` getter on the capabilities literal
+    // closes over the current instance — `this` inside an object-literal
+    // getter does NOT refer to the enclosing constructor's `this`, so we
+    // capture it explicitly. The getter projects the latest server
+    // capabilities snapshot so consumers always see the post-handshake
+    // value (or `null` pre-connect / post-disconnect) without needing to
+    // re-read `client.capabilities` after every transition.
+    const self = this;
+    this.capabilities = {
+      client: this.clientCapabilities,
+      get server(): ServerCapabilities | null {
+        return self.serverCapabilities;
+      },
+    };
+  }
+
+  // -------------------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------------------
+
+  async connect(): Promise<void> {
+    this.assertNotDisposed("connect");
+
+    // Mark the connecting transition before the transport's network
+    // round-trip starts so consumers (the connection store) see the
+    // intermediate state.
+    this.bus.markStatus("connecting");
+
+    let handshake;
+    try {
+      handshake = await this.transport.connect();
+    } catch (err) {
+      // Surface the failure on the status channel and re-throw so the
+      // caller can branch (design §8 — consumer decides whether to
+      // retry).
+      this.bus.markStatus("error");
+      throw err instanceof Error
+        ? err
+        : new ConnectionError(`transport connect failed: ${String(err)}`);
+    }
+
+    this.serverCapabilities = handshake.serverCapabilities;
+    this.bus.markStatus("connected");
+  }
+
+  async disconnect(): Promise<void> {
+    this.assertNotDisposed("disconnect");
+
+    try {
+      await this.transport.disconnect();
+    } finally {
+      this.serverCapabilities = null;
+      this.bus.markStatus("disconnected");
+    }
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    // Tear down sampling forwarder first so the transport's request
+    // handlers do not fire against a half-disposed bus / client.
+    try {
+      this.samplingForwarder.dispose();
+    } catch (err) {
+      this.logger.warn({ err }, "DiffuseCraftClient: sampling dispose threw");
+    }
+
+    // Dispose the bus before tearing down the transport so the bus's
+    // wire-level subscriptions unhook against a still-valid transport.
+    try {
+      this.bus.dispose();
+    } catch (err) {
+      this.logger.warn({ err }, "DiffuseCraftClient: event bus dispose threw");
+    }
+
+    try {
+      await this.transport.disconnect();
+    } catch (err) {
+      this.logger.warn(
+        { err },
+        "DiffuseCraftClient: transport disconnect threw during dispose",
+      );
+    }
+
+    this.serverCapabilities = null;
+  }
+
+  getStatus(): ConnectionStatus {
+    return this.bus.getStatus();
+  }
+
+  // -------------------------------------------------------------------
+  // Internals
+  // -------------------------------------------------------------------
+
+  /**
+   * Reject lifecycle calls made after {@link dispose}. Subscribe-side
+   * calls (`events.on`, `events.onConnectionStatus`,
+   * `sampling.onSample`) are deliberately tolerant of a disposed client
+   * — the underlying components return safe no-op unsubscribes — so
+   * consumers holding a stale reference do not crash.
+   */
+  private assertNotDisposed(op: string): void {
+    if (this.disposed) {
+      throw new ConnectionError(
+        `DiffuseCraftClient: ${op}() called after dispose()`,
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Transport selection
+// ---------------------------------------------------------------------------
+
+/**
+ * Branch on `config.transport.kind` and return the matching concrete
+ * {@link Transport}. The factory uses this once during construction;
+ * subsequent reconnect-on-failure logic lives inside the transport
+ * itself (HTTP only, B.4) — the client class never re-builds a
+ * transport.
+ */
+function buildTransport(config: ClientConfig): Transport {
+  const t = config.transport;
+  switch (t.kind) {
+    case "in-memory":
+      return new InMemoryTransport(t.server);
+    case "stdio":
+      return new StdioTransport({
+        command: t.command,
+        args: t.args ?? [],
+      });
+    case "http": {
+      const reconnect = config.reconnect;
+      return new HttpTransport({
+        url: t.url,
+        token: t.token,
+        request_timeout_ms: config.request_timeout_ms,
+        reconnect: {
+          enabled: reconnect.enabled,
+          max_attempts: reconnect.max_attempts,
+          backoff_ms: reconnect.backoff_ms,
+        },
+      });
+    }
+    default: {
+      // Exhaustiveness guard — Zod has already rejected unknown kinds
+      // by this point, but the switch keeps the compiler honest if the
+      // discriminated union grows in a future spec.
+      const exhaustive: never = t;
+      throw new ConnectionError(
+        `unknown transport kind: ${JSON.stringify(exhaustive)}`,
+      );
+    }
+  }
+}

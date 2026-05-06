@@ -5,6 +5,17 @@ export * from "./config";
 export * from "./errors";
 
 /**
+ * `createDiffuseCraftClient(config)` factory + `DiffuseCraftClient`
+ * interface (FR-1 / FR-2, design.md §3). The factory composes every
+ * Phase-A-through-K artifact (transports, event bus, tool methods,
+ * resource readers, pairing client, image helpers, sampling forwarder)
+ * into a single typed client surface — the entry point every consumer
+ * uses.
+ */
+export { createDiffuseCraftClient } from "./client.js";
+export type { DiffuseCraftClient } from "./client.js";
+
+/**
  * `Transport` interface (FR-6 / design.md §4). Re-exported on the public
  * surface so consumers can declare custom transports — e.g. test doubles,
  * embedded harnesses — that the `DiffuseCraftClient` will accept verbatim.
@@ -198,6 +209,20 @@ export type { QrScannerScanOptions } from "./adapters/qr-scanner.js";
  */
 export { fetchImage, uploadImage } from "./image/index.js";
 export type { UploadImageOptions } from "./image/index.js";
+
+/**
+ * Sampling forwarder (Phase I, FR-2 sampling slot, design.md §10).
+ * `SamplingForwarder` is the canonical bridge between the SDK's
+ * transport-level sampling channel and a single consumer-registered
+ * handler. The {@link DiffuseCraftClient.sampling} field wraps an
+ * instance internally; advanced consumers / tests can construct one
+ * directly to drive the forwarder against a custom transport.
+ *
+ * `SamplingHandler` is the consumer-facing handler signature surfaced
+ * via `client.sampling.onSample(handler)`.
+ */
+export { SamplingForwarder } from "./sampling/index.js";
+export type { SamplingHandler } from "./sampling/index.js";
 
 /**
  * Token-provider helpers (K.1 + K.2 + K.3, FR-26 / FR-27 / FR-23,
