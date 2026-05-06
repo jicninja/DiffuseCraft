@@ -54,10 +54,12 @@
 
 ## Phase E — Event bus
 
-- [ ] **E.1** `EventBus` with buffered events, typed listeners. **(M)**
-- [ ] **E.2** `event_buffer_size` config respected; oldest events discarded when full. **(S)**
-- [ ] **E.3** Connection-status events: `onConnectionStatus`. **(S)**
-- [ ] **E.4** Tests: subscribe before/after publish; buffer overflow; multiple subscribers. **(S)**
+- [x] **E.1** `EventBus` with buffered events, typed listeners. **(M)**
+- [x] **E.2** `event_buffer_size` config respected; oldest events discarded when full. **(S)**
+- [x] **E.3** Connection-status events: `onConnectionStatus`. **(S)**
+- [x]* **E.4** Tests: subscribe before/after publish; buffer overflow; multiple subscribers. **(S)**
+
+> **Deferred per testing.md.**
 
 ## Phase F — Pairing client
 

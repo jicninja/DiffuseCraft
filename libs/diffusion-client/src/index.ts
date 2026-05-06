@@ -115,3 +115,23 @@ export type {
   ZeroArgIterator,
   ZeroArgReader,
 } from "./resources/index.js";
+
+/**
+ * Buffered event bus (FR-19 / FR-20 / FR-21, design.md §3 + §7, E.1 + E.2 +
+ * E.3). `EventBus` owns per-event-name listener sets, a per-event-name FIFO
+ * buffer capped at `event_buffer_size` (FIFO discard with logger.warn on
+ * overflow), and the connection-status channel (`onConnectionStatus`,
+ * `markStatus`). The eventual `DiffuseCraftClient` (B.6) constructs one
+ * bus per session and exposes the typed `events` namespace on top of it;
+ * the in-memory transport delivers events synchronously while HTTP / stdio
+ * subscriptions are gated by the `server-architecture` upstream
+ * notification-publication gap (the bus logs a warning and proceeds).
+ */
+export { EventBus } from "./events/index.js";
+export type {
+  ConnectionStatus,
+  ConnectionStatusListener,
+  EventBusOptions,
+  EventListener,
+  HttpStatusSource,
+} from "./events/index.js";
