@@ -14,7 +14,7 @@
 - [x] **A.2** `ClientConfig` Zod schema with all fields from `requirements.md` §3.2. **(S)**
 - [x] **A.3** Error classes: `ClientValidationError`, `ServerError`, `RequestTimeoutError`, `ConnectionError`, `PairingRejectedError`, `SamplingNotSupportedError`. **(S)**
 - [x] **A.4** Type re-exports from `@diffusecraft/mcp-tools` (`ToolName`, `ToolInput<T>`, `ToolOutput<T>`, `EventName`, `EventPayload<E>`, `ResourceUri`). **(S)**
-- [ ] **A.5** `Transport` interface definition. **(XS)**
+- [x] **A.5** `Transport` interface definition. **(XS)**
 
 ## Phase B — Transports
 
