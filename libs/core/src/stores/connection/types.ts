@@ -30,6 +30,11 @@ export type ConnectionStatus =
  * Provenance tracks how the device first met the backend (mDNS scan, QR
  * scan, or manual entry) — this is metadata only and does NOT change
  * behavior.
+ *
+ * `url` is the dial-able base URL (e.g. `http://192.168.1.42:7821`) used
+ * by the SDK's HTTP transport to reach this backend on subsequent app
+ * launches. Without it, paired entries are unrecoverable handles —
+ * `id` + `name` alone do not identify a network endpoint.
  */
 export interface PairedBackend {
   id: string;
@@ -38,6 +43,8 @@ export interface PairedBackend {
   lastConnectedAt: string | null;
   /** Discovery origin of the pairing event. */
   origin: 'mdns' | 'qr' | 'manual';
+  /** Base URL the SDK dials when re-connecting to this backend. */
+  url: string;
 }
 
 /** Input to `pairBackend` — same as PairedBackend minus derived fields. */
@@ -45,6 +52,8 @@ export interface NewPairedBackend {
   id: string;
   name: string;
   origin: 'mdns' | 'qr' | 'manual';
+  /** Base URL the SDK will dial. Required so the backend is re-reachable. */
+  url: string;
 }
 
 /**

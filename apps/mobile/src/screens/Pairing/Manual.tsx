@@ -1,15 +1,24 @@
 // Implements 02d-Pairing-Manual from design-snapshot v1.0.0
 //
 // Full-screen form. Operator pastes a server URL + pairing token. The Pair
-// button is wired to a `console.log('TODO(pairing-protocol)')` placeholder;
-// real validation + handshake lands in pairing-protocol. The "What's this?"
-// disclosure expands to 4 short bullets explaining when to use Manual.
+// button now records the manually-entered backend in the connection store
+// (paired list + secure token), sets it as the current backend, and
+// returns to the editor. The root layout's `useDiffuseCraftClient` hook
+// observes the change, instantiates a `DiffuseCraftClient` over HTTP,
+// completes the MCP handshake, and threads the result into
+// `<StoresProvider>` so the editor's BottomPromptBar Generate button
+// can fire `generate_image` against the real server.
+//
+// The "What's this?" disclosure expands to 4 short bullets explaining
+// when to use Manual.
 
 import { useRouter } from 'expo-router';
 import { ChevronDown, ChevronLeft, ChevronUp, Eye, EyeOff } from 'lucide-react-native';
 import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
+import { useConnectionStore } from '@diffusecraft/core';
+import { PairingClient } from '@diffusecraft/diffusion-client';
 import {
   Button,
   Card,
@@ -18,20 +27,100 @@ import {
   CollapsibleTrigger,
   Input,
   Label,
+  toast,
 } from '@diffusecraft/ui';
 
 import { PAIRING_MANUAL_STRINGS as S } from '../_strings/PairingManual';
 
+/**
+ * Build a stable, content-addressed backend id from a base URL. We
+ * cannot use the server-issued token (it's the secret) and the user
+ * has not yet typed a name, so the URL is the only stable signal.
+ * Replacing non-alphanumerics keeps the id storage-key-safe across
+ * the persisted partialize and the secure-token key derivation.
+ */
+function manualBackendId(url: string): string {
+  const slug = url.replace(/[^a-z0-9]/gi, '_').slice(0, 64);
+  return `manual-${slug}`;
+}
+
 export function PairingManualScreen() {
   const router = useRouter();
+  const pairBackend = useConnectionStore((s) => s.pairBackend);
+  const setCurrentBackend = useConnectionStore((s) => s.setCurrentBackend);
 
   const [url, setUrl] = useState('');
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const onPair = () => {
-    console.log('TODO(pairing-protocol)');
+  const onPair = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      // Single-paste path: the operator pasted the server's `pair`
+      // boot-log line (`http://<ip>:<port>/?t=<token>`) into the URL
+      // field. Route through the SDK's parser so the URL + token
+      // extraction matches the server's `buildManualUrl` shape exactly.
+      // Two-field path: the operator typed URL + Token separately.
+      // Validate the URL with `new URL(...)` and require a non-empty
+      // token.
+      let parsed: { url: string; token: string };
+      const trimmedUrl = url.trim();
+      if (trimmedUrl.includes('?t=') || trimmedUrl.includes('?token=')) {
+        try {
+          parsed = new PairingClient({}).parseManual(trimmedUrl);
+        } catch (e: unknown) {
+          toast.error(e instanceof Error ? e.message : 'Invalid manual URL');
+          return;
+        }
+      } else {
+        try {
+          // Constructor throws if the input is not a valid URL.
+          new URL(trimmedUrl);
+        } catch {
+          toast.error('Invalid URL');
+          return;
+        }
+        const trimmedToken = token.trim();
+        if (trimmedToken.length === 0) {
+          toast.error('Token required');
+          return;
+        }
+        parsed = { url: trimmedUrl, token: trimmedToken };
+      }
+
+      // Derive a stable backend id from the URL (the only durable
+      // identifier available before the SDK handshake reads
+      // `diffusecraft://server/info`). Use the URL host as the
+      // displayed name so the Settings.About debug card has a
+      // human-readable label.
+      const id = manualBackendId(parsed.url);
+      let displayName: string;
+      try {
+        displayName = new URL(parsed.url).host;
+      } catch {
+        // Unreachable — `parseManual` / `new URL` above already
+        // validated the URL. Defensive fallback so the toast does not
+        // throw on a malformed host.
+        displayName = parsed.url;
+      }
+
+      await pairBackend(
+        { id, name: displayName, origin: 'manual', url: parsed.url },
+        parsed.token,
+      );
+      setCurrentBackend(id);
+
+      toast.info(`Paired with ${displayName}`);
+      // Send the user back to the root index; the conditional router
+      // (apps/mobile/app/index.tsx) re-evaluates connection status and
+      // routes to the editor / documents view as appropriate.
+      router.replace('/');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -111,7 +200,12 @@ export function PairingManualScreen() {
           </View>
 
           {/* Primary action */}
-          <Button variant="default" onPress={onPair} accessibilityLabel={S.pairButton}>
+          <Button
+            variant="default"
+            onPress={onPair}
+            disabled={submitting}
+            accessibilityLabel={S.pairButton}
+          >
             <Text className="text-primary-foreground text-body-strong">
               {S.pairButton}
             </Text>

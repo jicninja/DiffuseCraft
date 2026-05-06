@@ -52,6 +52,17 @@ const SAMPLE_PAIRED: PairedServerSummary[] = [
   { id: 'studio-pc', name: 'Studio PC' },
 ];
 
+/**
+ * Synthetic URLs for the debug-cycle sample backends. The debug bridge is
+ * exercised by hand (Settings.About debug card) and by visual-verification
+ * flows; the URLs are placeholders that are never actually dialed because
+ * the debug bridge skips token storage and connection setup.
+ */
+const SAMPLE_BACKEND_URLS: Record<string, string> = {
+  'imac-de-igna': 'http://imac-de-igna.local:7821',
+  'studio-pc': 'http://studio-pc.local:7821',
+};
+
 interface DebugCycleStep {
   status: RouterConnectionStatus;
   pairedServers: PairedServerSummary[];
@@ -63,6 +74,10 @@ const DEBUG_CYCLE: ReadonlyArray<DebugCycleStep> = [
   { status: 'paired-no-active', pairedServers: SAMPLE_PAIRED, activeServerId: null },
   { status: 'connected', pairedServers: SAMPLE_PAIRED, activeServerId: 'imac-de-igna' },
 ];
+
+function debugSampleUrl(id: string): string {
+  return SAMPLE_BACKEND_URLS[id] ?? `http://${id}.local:7821`;
+}
 
 /**
  * Derive the coarse router status used by `apps/mobile`'s root router from
@@ -119,6 +134,7 @@ export function createConnectionStore(
           id: backend.id,
           name: backend.name,
           origin: backend.origin,
+          url: backend.url,
           lastConnectedAt: null,
         };
         const existing = get().pairedBackends.filter((b) => b.id !== backend.id);
@@ -169,6 +185,7 @@ export function createConnectionStore(
           id: p.id,
           name: p.name,
           origin: 'manual',
+          url: debugSampleUrl(p.id),
           lastConnectedAt: null,
         }));
         set({
@@ -184,6 +201,7 @@ export function createConnectionStore(
           id: p.id,
           name: p.name,
           origin: 'manual',
+          url: debugSampleUrl(p.id),
           lastConnectedAt: null,
         }));
         set({ pairedBackends: paired });
@@ -199,6 +217,7 @@ export function createConnectionStore(
           id: p.id,
           name: p.name,
           origin: 'manual',
+          url: debugSampleUrl(p.id),
           lastConnectedAt: null,
         }));
         set({
@@ -222,9 +241,70 @@ export function createConnectionStore(
       currentBackendId: s.currentBackendId,
     }),
     storage: options.storage,
+    migrate: migrateConnectionPersistedState,
   });
 
   return createStore<ConnectionState>()(persist(initializer, persistOptions));
+}
+
+/**
+ * Migrate persisted connection-store state forward across schema versions.
+ *
+ * v1 → v2: PairedBackend gained a required `url` field. v1 entries do
+ * not carry a URL so the SDK cannot dial them; they are dropped to
+ * force the user back through the pairing flow with a real, recorded
+ * URL. Entries that already happen to carry `url` (cross-version test
+ * fixtures, hand-edited persistence) are kept verbatim. The current
+ * backend id is cleared if it pointed at a dropped entry so the
+ * router does not advertise a phantom active connection.
+ *
+ * Returning `undefined` falls through to "discard persisted state" in
+ * `buildPersistOptions`, which is the right move when the persisted
+ * shape is from a future version we don't understand or when no v2+
+ * entries survive the filter.
+ */
+function migrateConnectionPersistedState(
+  persisted: unknown,
+  fromVersion: number,
+): PersistedConnectionState | undefined {
+  if (persisted === null || typeof persisted !== 'object') return undefined;
+  const candidate = persisted as Partial<PersistedConnectionState> & {
+    pairedBackends?: unknown;
+    currentBackendId?: unknown;
+  };
+
+  if (fromVersion === 1) {
+    const rawList = Array.isArray(candidate.pairedBackends)
+      ? candidate.pairedBackends
+      : [];
+    const survivors: PairedBackend[] = [];
+    for (const entry of rawList) {
+      if (entry === null || typeof entry !== 'object') continue;
+      const e = entry as Partial<PairedBackend>;
+      if (typeof e.id !== 'string' || e.id.length === 0) continue;
+      if (typeof e.name !== 'string') continue;
+      if (typeof e.url !== 'string' || e.url.length === 0) continue;
+      const origin: PairedBackend['origin'] =
+        e.origin === 'mdns' || e.origin === 'qr' ? e.origin : 'manual';
+      survivors.push({
+        id: e.id,
+        name: e.name,
+        origin,
+        url: e.url,
+        lastConnectedAt: typeof e.lastConnectedAt === 'string' ? e.lastConnectedAt : null,
+      });
+    }
+
+    const rawCurrent =
+      typeof candidate.currentBackendId === 'string' ? candidate.currentBackendId : null;
+    const currentBackendId =
+      rawCurrent !== null && survivors.some((b) => b.id === rawCurrent) ? rawCurrent : null;
+
+    return { pairedBackends: survivors, currentBackendId };
+  }
+
+  // Unknown version — let buildPersistOptions discard.
+  return undefined;
 }
 
 export type { ConnectionState } from './types';
