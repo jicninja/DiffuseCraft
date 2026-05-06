@@ -9,6 +9,7 @@
 export {
   createToolMethods,
   toCamelCase,
+  validateToolInput,
 } from "./generated.js";
 
 export type {

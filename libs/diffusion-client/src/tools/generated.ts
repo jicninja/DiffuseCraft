@@ -43,7 +43,9 @@ import type {
   ToolName,
   ToolOutput,
 } from "@diffusecraft/mcp-tools";
+import type { z } from "zod";
 
+import { ClientValidationError } from "../errors.js";
 import type {
   Transport,
   TransportSendOptions,
@@ -95,6 +97,100 @@ export function toCamelCase<S extends string>(input: S): CamelCase<S> {
 }
 
 // ---------------------------------------------------------------------------
+// Client-side Zod validation (C.3 — FR-13)
+// ---------------------------------------------------------------------------
+
+/**
+ * Snake_case tool name → catalog `inputSchema` lookup table.
+ *
+ * Built once at module load by walking `catalog.tools`. Per-call validation
+ * (which runs on every tool invocation, FR-13 / NFR-4) needs O(1) access to
+ * the schema; iterating the catalog tuple every call would defeat the
+ * latency budget (NFR-4 — ≤5 ms client-side per typical input).
+ *
+ * The map is keyed by the snake_case canonical name (the `transport.send`
+ * wire identifier) so callers — both the generated default path below and
+ * any wrapper that opts in via {@link validateToolInput} — can address
+ * tools by their catalog identity rather than by camelCase.
+ */
+const inputSchemaByToolName: ReadonlyMap<string, z.ZodTypeAny> = (() => {
+  const m = new Map<string, z.ZodTypeAny>();
+  for (const tool of catalog.tools) {
+    m.set(tool.name, tool.inputSchema);
+  }
+  return m;
+})();
+
+/**
+ * Validate `args` against the catalog `inputSchema` for `toolName` (FR-13,
+ * design.md §5).
+ *
+ * Behaviour:
+ *
+ *   - Returns the **parsed** value on success (with optional / defaulted
+ *     fields filled in by Zod). Callers SHOULD pass this value to
+ *     `transport.send` rather than the original `args` so default values
+ *     declared in the catalog reach the wire.
+ *   - Throws {@link ClientValidationError} on failure, populating
+ *     `field_path` from the first issue's dotted path
+ *     (`issue.path.map(String).join(".")` — `"prompt"`,
+ *     `"control_layers.0.weight"`, etc.) and forwarding the full
+ *     `z.ZodError` as `cause` for downstream debugging.
+ *
+ * The default tool method path always invokes this helper before calling
+ * `transport.send`. Hand-written wrappers (C.2) opt in by calling it
+ * explicitly — wrappers that legitimately need to skip validation (e.g.,
+ * when they recompose `args` from synthetic inputs) simply do not call it.
+ *
+ * Exported so wrappers under `tools/` and integration code under
+ * `image/` (C.2's `upload_blob` wrapper) share the canonical path.
+ *
+ * @example
+ * ```ts
+ * const parsed = validateToolInput("generate_image", { prompt: "A cat" });
+ * // parsed has Zod defaults applied; pass it to transport.send.
+ * ```
+ */
+export function validateToolInput<N extends ToolName>(
+  toolName: N,
+  args: ToolInput<N>,
+): ToolInput<N> {
+  // Lookup is keyed by snake_case; `ToolName` is the catalog's literal union
+  // so the key is guaranteed present at runtime. Keep the lookup defensive —
+  // a missing entry indicates a build-time mismatch between the catalog and
+  // this module (e.g., manual editing of `catalog.tools`) and we surface it
+  // as a `ClientValidationError` rather than letting a `.safeParse` on
+  // `undefined` throw a `TypeError`.
+  const schema = inputSchemaByToolName.get(toolName);
+  if (!schema) {
+    throw new ClientValidationError(
+      `Unknown tool "${toolName}" — not present in @diffusecraft/mcp-tools catalog.`,
+      { field_path: undefined },
+    );
+  }
+
+  const result = schema.safeParse(args);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    const fieldPath = issue ? issue.path.map(String).join(".") : "";
+    const message = issue
+      ? `Invalid input for tool "${toolName}" at ${fieldPath || "<root>"}: ${issue.message}`
+      : `Invalid input for tool "${toolName}".`;
+    throw new ClientValidationError(message, {
+      field_path: fieldPath || undefined,
+      cause: result.error,
+    });
+  }
+
+  // `safeParse` returns `z.output<I>`, which is structurally a superset of
+  // `z.input<I>` (Zod fills in defaults / applies coercions). The catalog's
+  // `ToolInput<N>` alias is `z.input<I>`; we widen the parsed value back to
+  // that public type so the call site (and `transport.send`) keeps the same
+  // signature regardless of whether validation ran.
+  return result.data as ToolInput<N>;
+}
+
+// ---------------------------------------------------------------------------
 // TypedToolMethods — generated namespace shape
 // ---------------------------------------------------------------------------
 
@@ -131,7 +227,8 @@ export interface ToolCallOptions {
  * `Transport.send` overloads provide.
  *
  * Compile-time errors when consumers pass a wrong-shape argument
- * (FR-12); runtime validation lands in C.3 (Zod parse before send).
+ * (FR-12); runtime validation runs in {@link validateToolInput} (C.3 —
+ * Zod parse before send, see FR-13 / design.md §5).
  */
 export type TypedToolMethods = {
   [N in ToolName as CamelCase<N>]: (
@@ -235,10 +332,18 @@ export function createToolMethods(
       args: ToolInput<ToolName>,
       opts?: ToolCallOptions,
     ): Promise<ToolOutput<ToolName>> => {
+      // C.3 — FR-13: validate client-side BEFORE the transport call. The
+      // parsed value (with Zod defaults applied) is what the wire sees, so
+      // catalog-declared defaults reach the server even when the consumer
+      // omitted them. `validateToolInput` throws `ClientValidationError`
+      // with a populated `field_path` on failure — the throw escapes
+      // synchronously, before `transport.send` is invoked, satisfying the
+      // FR-13 wording "before any network call".
+      const parsed = validateToolInput(snakeName, args);
       const sendOpts: TransportSendOptions | undefined = opts
         ? { signal: opts.signal, timeout_ms: opts.timeout_ms }
         : undefined;
-      return transport.send(snakeName, args, sendOpts);
+      return transport.send(snakeName, parsed, sendOpts);
     };
   }
 

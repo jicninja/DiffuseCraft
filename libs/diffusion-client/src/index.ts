@@ -72,7 +72,11 @@ export type {
  * via the `wrappers` argument; client-side Zod validation (C.3), typed
  * server errors (C.4), and `AbortSignal` cascading (C.5) layer on top.
  */
-export { createToolMethods, toCamelCase } from "./tools/index.js";
+export {
+  createToolMethods,
+  toCamelCase,
+  validateToolInput,
+} from "./tools/index.js";
 export type {
   CamelCase,
   TypedToolMethods,
