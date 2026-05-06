@@ -74,16 +74,20 @@
 
 ## Phase G — Adapters
 
-- [ ] **G.1** `SecureStoreAdapter` interface + `InMemorySecureStoreAdapter` default. **(XS)**
-- [ ] **G.2** `QrScannerAdapter` interface. **(XS)**
+- [x] **G.1** `SecureStoreAdapter` interface + `InMemorySecureStoreAdapter` default. **(XS)**
+- [x] **G.2** `QrScannerAdapter` interface. **(XS)**
 - [ ] **G.3** Document expected adapter implementations for `apps/mobile` (RN: `react-native-zeroconf`, `expo-secure-store`, Expo Camera + ML Kit). **(S)**
 - [ ] **G.4** Document adapters for MeshCraft (Node + Electron: `bonjour-service`, `safeStorage`). **(S)**
 
+> **G.3, G.4 deferred:** documentation tasks (README content for adapter implementations on each host). Re-enter when wiring apps/mobile + MeshCraft.
+
 ## Phase H — Image helpers
 
-- [ ] **H.1** `image.fetch(envelope)` — handles inline base64 + ref via resource read. **(S)**
-- [ ] **H.2** `image.upload(bytes, format)` — calls `upload_blob`, returns ref. **(S)**
-- [ ] **H.3** Tests: round-trip an image up and back. **(S)**
+- [x] **H.1** `image.fetch(envelope)` — handles inline base64 + ref via resource read. **(S)**
+- [x] **H.2** `image.upload(bytes, format)` — calls `upload_blob`, returns ref. (Note: takes `(bytes, format, transport, { width, height })` — `upload_blob` requires explicit dimensions.) **(S)**
+- [x]* **H.3** Tests: round-trip an image up and back. **(S)**
+
+> **H.3 deferred per testing.md.**
 
 ## Phase I — MCP sampling
 
@@ -101,9 +105,11 @@
 
 ## Phase K — Token storage integration
 
-- [ ] **K.1** `TokenProvider` function type; SDK calls it once per session, caches for ~5 minutes. **(S)**
-- [ ] **K.2** `SecureStoreAdapter` integration: connection store fetches token via SDK on connect. **(S)**
-- [ ] **K.3** Token rotation: when server rotates token, SDK receives + writes via `secureStore.set`. **(S)**
+- [x] **K.1** `TokenProvider` function type; SDK calls it once per session, caches for ~5 minutes. **(S)**
+- [x] **K.2** `SecureStoreAdapter` integration: connection store fetches token via SDK on connect. **(S)**
+- [x] **K.3** Token rotation: when server rotates token, SDK receives + writes via `secureStore.set`. **(S)**
+
+> **K.3 activation-pending:** SDK side complete (TokenRotationHook). Wire activation pends a catalog-level rotation event/header — same upstream gap as B.2/B.3 subscribe.
 
 ## Phase L — Documentation & integration
 

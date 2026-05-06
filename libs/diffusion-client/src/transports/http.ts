@@ -103,6 +103,7 @@ import type {
 
 import type { TokenProvider } from "../config.js";
 import { ConnectionError } from "../errors.js";
+import { TokenCache } from "../shared/token-provider.js";
 import {
   isErrorToolResult,
   serverErrorFromIsErrorResult,
@@ -296,6 +297,19 @@ export class HttpTransport implements Transport {
   private resolvedToken: string | null = null;
 
   /**
+   * Process-local {@link TokenCache} (K.1, FR-27). Used when
+   * `config.token` is a {@link TokenProvider} so the consumer's
+   * keychain hook is invoked at most once per ~5 minute session
+   * window. When `config.token` is a literal string the cache is
+   * still constructed (consistent shape) but never consulted —
+   * literal tokens are returned verbatim by {@link resolveTokenFor}.
+   *
+   * Invalidated on `disconnect()` and on every `rebuildClient()` so
+   * a reconnect after a token rotation observes the fresh value.
+   */
+  private readonly tokenCache = new TokenCache();
+
+  /**
    * Sampling handler registered via {@link sampling.register}. Same
    * single-slot semantics as the stdio transport — design.md §10.2 — so
    * the SDK only ever forwards to one consumer.
@@ -463,11 +477,12 @@ export class HttpTransport implements Transport {
     }
 
     // 2) Resolve the bearer token. Literal strings are used verbatim;
-    //    `TokenProvider` functions are invoked once and the result is
-    //    cached on the instance for the lifetime of the connection.
+    //    `TokenProvider` functions are routed through the per-session
+    //    {@link TokenCache} so the consumer's keychain hook is invoked
+    //    at most once per ~5 minute window (FR-27).
     let token: string;
     try {
-      token = await resolveToken(this.config.token);
+      token = await this.resolveTokenFor(this.config.token);
     } catch (err) {
       throw new ConnectionError(
         `http transport: token resolution failed (${err instanceof Error ? err.message : String(err)})`,
@@ -753,6 +768,7 @@ export class HttpTransport implements Transport {
     if (!client || !this.connected) {
       this.connected = false;
       this.resolvedToken = null;
+      this.tokenCache.invalidate();
       this.statusListeners.clear();
       this.userInitiatedClose = false;
       return;
@@ -789,6 +805,10 @@ export class HttpTransport implements Transport {
       this.sdkTransport = null;
       this.samplingHandler = null;
       this.resolvedToken = null;
+      // Drop the cached provider resolution — a future `connect()`
+      // re-resolves through the consumer's keychain hook so a
+      // disconnect-after-rotation observes the new token.
+      this.tokenCache.invalidate();
       this.statusListeners.clear();
       this.userInitiatedClose = false;
     }
@@ -825,6 +845,24 @@ export class HttpTransport implements Transport {
       );
     }
     return this.client;
+  }
+
+  /**
+   * Resolve a {@link HttpTransportConfig.token} value to a concrete
+   * string (K.1 / FR-27).
+   *
+   * Literal strings short-circuit to a direct return — they're static
+   * for the lifetime of the transport and there's nothing to cache.
+   * Function-shaped tokens ({@link TokenProvider}) are routed through
+   * the per-instance {@link TokenCache} so the consumer's keychain hook
+   * is invoked at most once per ~5 minute window across `connect()`,
+   * `rebuildClient()`, and any future per-call resolution paths.
+   */
+  private async resolveTokenFor(
+    token: string | TokenProvider,
+  ): Promise<string> {
+    if (typeof token === "string") return token;
+    return this.tokenCache.resolve(token);
   }
 
   /**
@@ -1090,10 +1128,15 @@ export class HttpTransport implements Transport {
 
     // Re-resolve the bearer token. A `TokenProvider` may have rotated
     // it between attempts; honouring that is the whole reason FR-7
-    // calls out per-attempt token resolution.
+    // calls out per-attempt token resolution. We invalidate the cache
+    // first so the new attempt observes a fresh provider invocation
+    // even when the previous resolution is still TTL-fresh — a
+    // reconnect implies the previous token may have been the cause of
+    // the close (e.g. server-side rotation, revocation).
+    this.tokenCache.invalidate();
     let token: string;
     try {
-      token = await resolveToken(this.config.token);
+      token = await this.resolveTokenFor(this.config.token);
     } catch (err) {
       throw new ConnectionError(
         `http transport: token resolution failed (${err instanceof Error ? err.message : String(err)})`,
@@ -1205,16 +1248,6 @@ export class HttpTransport implements Transport {
   }
 }
 
-/**
- * Resolve a {@link HttpTransportConfig.token} value to a concrete string.
- * Strings are returned verbatim; functions are invoked and the result is
- * awaited (the `TokenProvider` signature returns `string | Promise<string>`,
- * so awaiting a sync return is a no-op).
- */
-async function resolveToken(token: string | TokenProvider): Promise<string> {
-  if (typeof token === "string") return token;
-  return await token();
-}
 
 /**
  * Internal record tracking a `send()` call from the moment it dispatches

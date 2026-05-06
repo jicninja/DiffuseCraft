@@ -168,3 +168,61 @@ export type {
  */
 export { DEFAULT_MDNS_SERVICE_NAME } from "./adapters/mdns.js";
 export type { MdnsScanOptions } from "./adapters/mdns.js";
+
+/**
+ * Secure-store adapter (G.1, FR-26 / FR-28, design §12). Consumers
+ * supply a concrete adapter via `ClientConfig.adapters.secureStore`;
+ * tests + Node-side use can opt into the bundled
+ * {@link InMemorySecureStoreAdapter}. The interface re-exported from
+ * `config.ts` (above) is structurally identical — both spellings
+ * resolve to the same shape.
+ */
+export { InMemorySecureStoreAdapter } from "./adapters/secure-store.js";
+
+/**
+ * QR-scanner adapter (G.2, FR-22, design §12). Consumers supply a
+ * concrete adapter via `ClientConfig.adapters.qrScanner` (the tablet
+ * uses Expo Camera + ML Kit). The auxiliary {@link QrScannerScanOptions}
+ * shape is re-exported here so consumers can declare adapter
+ * implementations against the canonical type.
+ */
+export type { QrScannerScanOptions } from "./adapters/qr-scanner.js";
+
+/**
+ * Image envelope helpers (H.1 + H.2, FR-34 / FR-35, design §11).
+ * Consumers usually call `client.image.fetch(envelope)` /
+ * `client.image.upload(bytes, format, transport, opts)` after Phase B.6
+ * wires the namespace; the standalone functions are re-exported here
+ * so test harnesses + advanced consumers can call them without going
+ * through the full client.
+ */
+export { fetchImage, uploadImage } from "./image/index.js";
+export type { UploadImageOptions } from "./image/index.js";
+
+/**
+ * Token-provider helpers (K.1 + K.2 + K.3, FR-26 / FR-27 / FR-23,
+ * design §3 / §9 / §11).
+ *
+ * - {@link TokenCache}: ~5 minute resolver cache around a
+ *   {@link TokenProvider} (FR-27). Used internally by
+ *   {@link HttpTransport}; re-exported so consumers / tests can
+ *   construct one directly.
+ * - {@link TokenStore}: {@link SecureStoreAdapter}-backed persistence
+ *   wrapper (FR-26 / FR-28).
+ * - {@link TokenRotationHook}: token-rotation observer + persistence
+ *   fan-out (FR-23). Wired-in placeholder until the catalog gains a
+ *   wire-level rotation event; the SDK side is a fully functional
+ *   observer ready for consumers (the connection store) to register
+ *   listeners against.
+ */
+export {
+  DEFAULT_TOKEN_CACHE_TTL_MS,
+  DEFAULT_TOKEN_STORAGE_KEY,
+  TokenCache,
+  TokenStore,
+  TokenRotationHook,
+} from "./shared/token-provider.js";
+export type {
+  TokenRotationEvent,
+  TokenRotationListener,
+} from "./shared/token-provider.js";

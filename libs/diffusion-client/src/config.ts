@@ -24,6 +24,8 @@ import { z } from "zod";
 import { ClientCapabilities as ClientCapabilitiesSchema } from "@diffusecraft/mcp-tools";
 import { ClientValidationError } from "./errors.js";
 import type { MdnsAdapter as RuntimeMdnsAdapter } from "./adapters/mdns.js";
+import type { SecureStoreAdapter as RuntimeSecureStoreAdapter } from "./adapters/secure-store.js";
+import type { QrScannerAdapter as RuntimeQrScannerAdapter } from "./adapters/qr-scanner.js";
 
 // ---------------------------------------------------------------------------
 // Re-exported / declared interfaces
@@ -63,23 +65,27 @@ export interface TokenProvider {
 export type MdnsAdapter = RuntimeMdnsAdapter;
 
 /**
- * Secure-token storage adapter (design §12, FR-26). The SDK provides an
- * in-memory default for tests; production tablet usage requires
- * `expo-secure-store`, MeshCraft uses Electron `safeStorage`.
+ * Secure-token storage adapter (design §12, FR-26 / FR-28).
+ *
+ * The authoritative runtime contract lives in
+ * `./adapters/secure-store.ts` (G.1). This re-export keeps
+ * `import { SecureStoreAdapter } from "@diffusecraft/diffusion-client"`
+ * — the shape consumers configure via
+ * `ClientConfig.adapters.secureStore` — and the connection-layer import
+ * pointed at the same interface. The bundled
+ * {@link InMemorySecureStoreAdapter} default is exported from the same
+ * file (FR-28).
  */
-export interface SecureStoreAdapter {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string): Promise<void>;
-  delete(key: string): Promise<void>;
-}
+export type SecureStoreAdapter = RuntimeSecureStoreAdapter;
 
 /**
- * QR-scanner adapter (design §12). Returns the raw QR payload string; the SDK
- * parses it via `pairing.parseQr`.
+ * QR-scanner adapter (design §12, FR-22).
+ *
+ * The authoritative runtime contract lives in
+ * `./adapters/qr-scanner.ts` (G.2). Returns the raw QR payload string;
+ * the SDK parses it via `pairing.parseQr`.
  */
-export interface QrScannerAdapter {
-  scanOnce(opts?: { timeout_ms?: number }): Promise<string>;
-}
+export type QrScannerAdapter = RuntimeQrScannerAdapter;
 
 /**
  * Minimal logger interface compatible with `pino`-style sinks. Default is a
