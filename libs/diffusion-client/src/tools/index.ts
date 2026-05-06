@@ -7,6 +7,8 @@
  * uses to construct that field. C.2 lands the hand-written wrappers map.
  */
 export {
+  abortError,
+  callToolWithAbort,
   createToolMethods,
   toCamelCase,
   validateToolInput,

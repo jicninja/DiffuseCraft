@@ -73,6 +73,8 @@ export type {
  * server errors (C.4), and `AbortSignal` cascading (C.5) layer on top.
  */
 export {
+  abortError,
+  callToolWithAbort,
   createToolMethods,
   toCamelCase,
   validateToolInput,

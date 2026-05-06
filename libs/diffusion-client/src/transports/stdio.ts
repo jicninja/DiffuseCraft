@@ -351,8 +351,10 @@ export class StdioTransport implements Transport {
    *
    * The MCP SDK's `callTool` has its own `RequestOptions.timeout`; we
    * pass `opts.timeout_ms` through verbatim. Pre-aborted signals throw
-   * `Error("aborted")` — Phase C.5 replaces this with the canonical
-   * abort error shape and adds mid-flight cancellation cascade.
+   * `DOMException('Aborted', 'AbortError')` (C.5 — Web-standard abort
+   * shape). Mid-flight `cancel_job` cascade for job-shaped tools is
+   * orchestrated one layer above in `tools/generated.ts` — the transport
+   * layer only owns the pre-flight short-circuit.
    */
   async send<N extends ToolName>(
     toolName: N,
@@ -360,9 +362,11 @@ export class StdioTransport implements Transport {
     opts?: TransportSendOptions,
   ): Promise<ToolOutput<N>> {
     if (opts?.signal?.aborted) {
-      // Phase C.5 (AbortSignal plumbing) replaces this minimal
-      // placeholder with the SDK's canonical abort error shape.
-      throw new Error("aborted");
+      // Canonical Web-standard abort error (C.5 — design.md §1 Q4).
+      // `signal.reason` is honoured when set so consumer-provided abort
+      // causes propagate; otherwise we fall back to the spec-defined
+      // `DOMException('Aborted', 'AbortError')`.
+      throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
     const client = this.requireClient();
 
@@ -415,7 +419,8 @@ export class StdioTransport implements Transport {
     opts?: TransportReadResourceOptions,
   ): Promise<unknown> {
     if (opts?.signal?.aborted) {
-      throw new Error("aborted");
+      // Canonical Web-standard abort error (C.5 — design.md §1 Q4).
+      throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
     const client = this.requireClient();
 

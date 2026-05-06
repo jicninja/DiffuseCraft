@@ -43,6 +43,7 @@ import type {
   ToolName,
   ToolOutput,
 } from "@diffusecraft/mcp-tools";
+import type { ToolCategory } from "@diffusecraft/mcp-tools";
 import type { z } from "zod";
 
 import { ClientValidationError } from "../errors.js";
@@ -191,6 +192,211 @@ export function validateToolInput<N extends ToolName>(
 }
 
 // ---------------------------------------------------------------------------
+// AbortSignal orchestration (C.5 — FR-15 / Q4, design.md §1 + §5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Snake_case tool name → catalog `category` lookup table.
+ *
+ * Built once at module load by walking `catalog.tools`. The abort-cascade
+ * orchestration in {@link callToolWithAbort} (and any wrapper that opts in)
+ * needs O(1) access to a tool's category to decide whether a post-send
+ * abort should fan out to `cancel_job(job_id)` (FR-15 / Q4 — only
+ * `category: "job"` tools queue server-side work that survives the
+ * caller's promise rejection).
+ *
+ * Keyed by the snake_case canonical name so callers address tools by their
+ * catalog identity, mirroring {@link inputSchemaByToolName}.
+ */
+const categoryByToolName: ReadonlyMap<string, ToolCategory> = (() => {
+  const m = new Map<string, ToolCategory>();
+  for (const tool of catalog.tools) {
+    m.set(tool.name, tool.category);
+  }
+  return m;
+})();
+
+/**
+ * Construct the canonical abort error.
+ *
+ * Per design.md §1 (Q4 — `AbortSignal supported`) the SDK rejects with the
+ * Web-standard `DOMException('Aborted', 'AbortError')` when a consumer
+ * cancels a tool call. ES2022 / Node 18+ surfaces a `signal.reason`
+ * property — when present we honour it (the consumer may have set a
+ * domain-specific abort cause); otherwise we fall back to the canonical
+ * `DOMException`.
+ *
+ * Exported for transport-level callers that previously threw the
+ * placeholder `Error("aborted")`; routing through this helper keeps every
+ * abort-induced rejection on a single error shape (see the boundary note
+ * at the top of this module).
+ */
+export function abortError(signal?: AbortSignal): unknown {
+  if (signal && "reason" in signal && signal.reason !== undefined) {
+    return signal.reason;
+  }
+  return new DOMException("Aborted", "AbortError");
+}
+
+/**
+ * Per-call orchestration that wires `AbortSignal` into a tool invocation
+ * (FR-15 / Q4, design.md §1 + §5).
+ *
+ * Behaviour:
+ *
+ *   1. **Pre-send abort** — if `opts.signal` is already aborted at call
+ *      time, the function throws {@link abortError} synchronously and
+ *      `transport.send` is **not** invoked. This satisfies the design.md
+ *      §1 ruling "Pre-send abort → no request".
+ *   2. **Non-job tools** (`category: "read" | "write"`) — the signal is
+ *      forwarded to `transport.send` verbatim. The transport's own
+ *      pre-flight short-circuit handles in-flight cancellation; there is
+ *      no server-side handle to retract because the call resolves
+ *      synchronously from the client's perspective.
+ *   3. **Job tools** (`category: "job"`) — the immediate response from
+ *      `transport.send` carries a `job_id` (per `mcp-tool-catalog`'s
+ *      job-shaped output convention; see e.g. `generate_image`'s
+ *      `Output = z.object({ job_id, ... })`). When the signal aborts
+ *      after the queue acknowledgement we fire
+ *      `transport.send("cancel_job", { job_id })` fire-and-forget — the
+ *      caller has already moved on (their promise rejected), so a failed
+ *      cancel cannot be propagated up to them; the SDK's optional logger
+ *      receives the failure if configured.
+ *
+ *      Two abort windows exist for job-shaped tools:
+ *
+ *      - **Between send and queue ack** — if the signal fires while we
+ *        await the queue acknowledgement, we honour the abort *after* we
+ *        have a `job_id`: the abort post-await branch fires `cancel_job`
+ *        and rejects with {@link abortError}. We deliberately do NOT
+ *        cancel pre-emptively at the SDK level here — the job is already
+ *        queued server-side, so the only honest cancellation is one that
+ *        carries the `job_id`.
+ *      - **After queue ack** — we attach a one-shot `abort` listener that
+ *        fires `cancel_job` when the consumer aborts the long-running job
+ *        (the realistic cancellation case for `generate_image`,
+ *        `upscale_image`, etc.).
+ *
+ * Symmetry note: wrappers that opt into validation via
+ * {@link validateToolInput} should likewise route their `transport.send`
+ * call through this helper to inherit the abort-cascade contract.
+ */
+export async function callToolWithAbort<N extends ToolName>(
+  transport: Transport,
+  toolName: N,
+  args: ToolInput<N>,
+  opts: ToolCallOptions | undefined,
+  toolCategory: ToolCategory,
+): Promise<ToolOutput<N>> {
+  const signal = opts?.signal;
+
+  // (1) Pre-send abort — the design.md §1 ruling: "Pre-send abort →
+  // no request". We synchronously throw the canonical abort error
+  // before invoking `transport.send`, so the transport never observes
+  // a pre-aborted signal originating from this orchestration layer.
+  if (signal?.aborted) {
+    throw abortError(signal);
+  }
+
+  const sendOpts: TransportSendOptions | undefined = opts
+    ? { signal: opts.signal, timeout_ms: opts.timeout_ms }
+    : undefined;
+
+  // (2) Non-job tools — pass the signal through verbatim. Read tools
+  // resolve quickly; write tools have already committed their effect by
+  // the time the response returns. Either way there is no server-side
+  // job handle to retract, so the abort cascade collapses to "let the
+  // transport reject the in-flight call if it can; otherwise just throw
+  // the abort error to the caller".
+  if (toolCategory !== "job") {
+    return transport.send(toolName, args, sendOpts);
+  }
+
+  // (3) Job tools — fire the request and orchestrate post-send
+  // cancellation around the immediate response.
+  const sendPromise = transport.send(toolName, args, sendOpts);
+
+  // The transport may reject the `sendPromise` itself (network failure,
+  // server error, etc.). We propagate that rejection unchanged — the
+  // caller sees the underlying error rather than a synthetic abort.
+  const result = await sendPromise;
+
+  // Job-shaped outputs always carry a `job_id` per the catalog
+  // convention; the runtime read here is defensive (the catalog could
+  // grow a job-category tool that wraps the id elsewhere — at which
+  // point this helper would need updating to extract the right field).
+  const jobId = (result as { job_id?: string }).job_id;
+  if (jobId === undefined) {
+    return result;
+  }
+
+  // Window A — signal aborted between send and queue ack. The job is
+  // already running on the server, so we DO fire `cancel_job` (we now
+  // have the id) and reject with the canonical abort error. This is
+  // distinct from the pre-send case in (1): there, no request reached
+  // the server; here, the server has accepted the job and we owe it a
+  // cancellation.
+  if (signal?.aborted) {
+    fireAndForgetCancelJob(transport, jobId);
+    throw abortError(signal);
+  }
+
+  // Window B — signal aborts after we hand the result back to the
+  // caller. We attach a one-shot listener so the long-running job is
+  // retracted when the consumer aborts mid-flight (the realistic
+  // generate_image / upscale_image cancellation case). The caller's
+  // promise has already resolved with `result`; their abort no longer
+  // affects this promise — it only triggers the side-effecting
+  // cancel_job emission. The `{ once: true }` flag detaches the listener
+  // automatically after the first fire (the signal cannot abort twice).
+  if (signal !== undefined) {
+    signal.addEventListener(
+      "abort",
+      () => {
+        fireAndForgetCancelJob(transport, jobId);
+      },
+      { once: true },
+    );
+  }
+
+  return result;
+}
+
+/**
+ * Fire-and-forget `cancel_job(job_id)` over the transport. Used by
+ * {@link callToolWithAbort} to retract job-shaped work after a post-send
+ * abort.
+ *
+ * The cancel emission cannot fail the caller's promise — the caller has
+ * already moved on (their original promise rejected with the abort, or
+ * resolved before they aborted). We swallow rejections silently here;
+ * a future logger plumbing (see SDK `Logger` interface, FR-4) could
+ * surface the failure to consumers, but in v1 a failed cancel is purely
+ * advisory: the server will eventually time out the job on its own.
+ *
+ * The `as unknown as ToolInput<"cancel_job">` cast bridges the loose
+ * runtime call site to the typed transport overload — the catalog
+ * declares `cancel_job` with `Input = z.object({ job_id: JobId })`, so
+ * passing `{ job_id }` matches the wire shape.
+ */
+function fireAndForgetCancelJob(transport: Transport, jobId: string): void {
+  // `void` discards the returned promise without awaiting; the
+  // `.catch(() => {})` is required because an unhandled promise
+  // rejection on Node would otherwise warn (or, with `--unhandled-rejections=strict`,
+  // crash).
+  void transport
+    .send(
+      "cancel_job",
+      { job_id: jobId } as unknown as ToolInput<"cancel_job">,
+    )
+    .catch(() => {
+      // Intentionally swallowed — see function-level note. A future
+      // logger hook can surface this; for now an unsuccessful cancel is
+      // purely advisory (the server times the job out on its own).
+    });
+}
+
+// ---------------------------------------------------------------------------
 // TypedToolMethods — generated namespace shape
 // ---------------------------------------------------------------------------
 
@@ -328,6 +534,15 @@ export function createToolMethods(
       continue;
     }
 
+    // Resolve the catalog category once per tool registration so the
+    // default branch's abort orchestration (C.5 — FR-15 / Q4) does not
+    // re-walk the lookup table on every invocation. The catalog is the
+    // single source of truth; if a tool's category were missing here,
+    // it would mean the manifest changed under us — fall back to
+    // `"write"` (no `cancel_job` cascade) to avoid spuriously
+    // cancelling a non-existent job.
+    const category = categoryByToolName.get(snakeName) ?? "write";
+
     methods[camelName] = (
       args: ToolInput<ToolName>,
       opts?: ToolCallOptions,
@@ -340,10 +555,13 @@ export function createToolMethods(
       // synchronously, before `transport.send` is invoked, satisfying the
       // FR-13 wording "before any network call".
       const parsed = validateToolInput(snakeName, args);
-      const sendOpts: TransportSendOptions | undefined = opts
-        ? { signal: opts.signal, timeout_ms: opts.timeout_ms }
-        : undefined;
-      return transport.send(snakeName, parsed, sendOpts);
+      // C.5 — FR-15 / Q4: route through `callToolWithAbort` so pre-send
+      // aborts skip dispatch entirely (DOMException('Aborted','AbortError'))
+      // and post-send aborts on job-shaped tools cascade to
+      // `cancel_job(job_id)`. The orchestrator forwards `opts` to the
+      // transport as `TransportSendOptions` internally — the default
+      // branch never builds `sendOpts` itself.
+      return callToolWithAbort(transport, snakeName, parsed, opts, category);
     };
   }
 

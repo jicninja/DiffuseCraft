@@ -590,8 +590,10 @@ export class HttpTransport implements Transport {
    * The MCP SDK's `callTool` accepts a `RequestOptions.timeout`; we
    * honour `opts.timeout_ms` first and fall back to
    * `config.request_timeout_ms`. Pre-aborted signals throw
-   * `Error("aborted")` — Phase C.5 replaces this with the canonical
-   * abort error shape and adds mid-flight cancellation cascade.
+   * `DOMException('Aborted', 'AbortError')` (C.5 — Web-standard abort
+   * shape). Mid-flight `cancel_job` cascade for job-shaped tools is
+   * orchestrated one layer above in `tools/generated.ts` — the transport
+   * layer only owns the pre-flight short-circuit.
    */
   async send<N extends ToolName>(
     toolName: N,
@@ -599,7 +601,11 @@ export class HttpTransport implements Transport {
     opts?: TransportSendOptions,
   ): Promise<ToolOutput<N>> {
     if (opts?.signal?.aborted) {
-      throw new Error("aborted");
+      // Canonical Web-standard abort error (C.5 — design.md §1 Q4).
+      // `signal.reason` is honoured when set so consumer-provided abort
+      // causes propagate; otherwise we fall back to the spec-defined
+      // `DOMException('Aborted', 'AbortError')`.
+      throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
 
     // Reconnect-failure terminal state — every future call rejects with
@@ -633,7 +639,8 @@ export class HttpTransport implements Transport {
     opts?: TransportReadResourceOptions,
   ): Promise<unknown> {
     if (opts?.signal?.aborted) {
-      throw new Error("aborted");
+      // Canonical Web-standard abort error (C.5 — design.md §1 Q4).
+      throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
 
     // Reconnect-failure terminal state mirrors `send()`.
@@ -654,7 +661,8 @@ export class HttpTransport implements Transport {
         // through to the gate below.
       }
       if (opts?.signal?.aborted) {
-        throw new Error("aborted");
+        // Canonical Web-standard abort error (C.5 — design.md §1 Q4).
+        throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
       }
       if (this.failed) {
         throw this.reconnectError ?? reconnectFailedError("transport failed");

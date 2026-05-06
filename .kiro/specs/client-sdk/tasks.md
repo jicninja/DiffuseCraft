@@ -38,8 +38,10 @@
 > **Deferred until Phase H:** C.1's `createToolMethods(transport, wrappers?)` already exposes the wrapper hook. The only known special-case in v1 is `upload_blob`, which needs the image helpers (H.1/H.2) to exist first. Re-enter C.2 after H.2 lands.
 - [x] **C.3** Client-side Zod validation before send. Throws `ClientValidationError` with field path. **(S)**
 - [x] **C.4** Server error parsing: typed `ServerError` thrown on 4xx/5xx and MCP error responses. **(S)**
-- [ ] **C.5** AbortSignal support per call. Pre-send abort no-op; post-send → `cancel_job` for jobs. **(M)**
-- [ ] **C.6** Tests: 5 representative tool methods with mock transport. **(M)**
+- [x] **C.5** AbortSignal support per call. Pre-send abort no-op; post-send → `cancel_job` for jobs. **(M)**
+- [x]* **C.6** Tests: 5 representative tool methods with mock transport. **(M)**
+
+> **Deferred per `.kiro/steering/testing.md`:** automated tests disabled until end of v1. Re-enable after H phase.
 
 ## Phase D — Resource readers
 

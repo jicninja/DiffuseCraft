@@ -268,11 +268,13 @@ export class InMemoryTransport implements Transport {
    *
    * `opts.signal` is honoured only as a pre-invocation short-circuit:
    * if the signal is already aborted when `send` is called, the call
-   * rejects without dispatching to the server. Mid-flight cancellation
-   * (`cancel_job` cascade per Q4) is wired in C.5 (AbortSignal Phase C).
-   * The `opts.timeout_ms` slot is unused on this transport because
-   * in-memory dispatch is synchronous-ish (a microtask hop) and the
-   * SDK-wide `request_timeout_ms` is enforced at the client wrapper.
+   * rejects without dispatching to the server. Post-send abort with
+   * `cancel_job` cascade for job-shaped tools is orchestrated one layer
+   * above (`tools/generated.ts` — `callToolWithAbort`); the transport
+   * layer only owns the pre-flight short-circuit. The `opts.timeout_ms`
+   * slot is unused on this transport because in-memory dispatch is
+   * synchronous-ish (a microtask hop) and the SDK-wide
+   * `request_timeout_ms` is enforced at the client wrapper.
    */
   async send<N extends ToolName>(
     toolName: N,
@@ -280,9 +282,11 @@ export class InMemoryTransport implements Transport {
     opts?: TransportSendOptions,
   ): Promise<ToolOutput<N>> {
     if (opts?.signal?.aborted) {
-      // Phase C.5 (AbortSignal plumbing) replaces this minimal
-      // placeholder with the SDK's canonical abort error shape.
-      throw new Error("aborted");
+      // Canonical Web-standard abort error (C.5 — design.md §1 Q4).
+      // `signal.reason` is honoured when set so consumer-provided abort
+      // causes propagate; otherwise we fall back to the spec-defined
+      // `DOMException('Aborted', 'AbortError')`.
+      throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
     const result = await this.getServer().mcp.invokeTool(toolName, args);
     return result as ToolOutput<N>;
@@ -305,7 +309,8 @@ export class InMemoryTransport implements Transport {
     opts?: TransportReadResourceOptions,
   ): Promise<unknown> {
     if (opts?.signal?.aborted) {
-      throw new Error("aborted");
+      // Canonical Web-standard abort error (C.5 — design.md §1 Q4).
+      throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
     }
     return this.getServer().mcp.readResource(uri);
   }
