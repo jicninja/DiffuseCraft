@@ -263,3 +263,13 @@ export type {
   McpClientCapabilities,
   MapToMcpCapabilitiesInput,
 } from "./shared/capabilities-map.js";
+
+/**
+ * `@diffusecraft/core` interop adapter. Projects the SDK's typed
+ * `DiffuseCraftClient` surface onto the structurally-typed
+ * `DiffuseCraftClientLike` shape consumed by `<StoresProvider
+ * client={...} />`. App shells call this once after constructing the
+ * SDK client and pass the result to the provider (see README §"Wiring
+ * with @diffusecraft/core").
+ */
+export { toCoreClient } from "./core-adapter.js";

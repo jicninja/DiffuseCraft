@@ -30,7 +30,8 @@ import { Mic, Sparkles } from 'lucide-react-native';
 import * as React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 
-import { Badge, Button, Slider, Textarea } from '@diffusecraft/ui';
+import { useDiffusionClient } from '@diffusecraft/core';
+import { Badge, Button, Slider, Textarea, toast } from '@diffusecraft/ui';
 
 import { MOCK_PRESETS } from '../_mock/presets';
 import { EDITOR_STRINGS } from '../_strings/Editor';
@@ -50,18 +51,53 @@ export function BottomPromptBar({ workspace, onSubmit }: BottomPromptBarProps) {
   // matches the visible "Strength: 75%" label in the brief.
   const [strength, setStrength] = React.useState<number>(75);
   const [activePreset, setActivePreset] = React.useState<string>(MOCK_PRESETS[0].id);
+  const [submitting, setSubmitting] = React.useState<boolean>(false);
+
+  // SDK client wired by `<StoresProvider client={...}>`. Null until the
+  // user has paired with a server (the pairing screen lands separately —
+  // until then, the Generate button shows a friendly "connect first"
+  // toast and bails out without calling the SDK).
+  const client = useDiffusionClient();
 
   const primaryLabel = workspace === 'inpaint' ? S.primaryFill : S.primaryGenerate;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (onSubmit) {
       onSubmit(prompt);
       return;
     }
-    // TODO(client-state-architecture): dispatch generate/fill through the
-    // editor state machine.
-    // eslint-disable-next-line no-console
-    console.log('TODO(client-state-architecture)');
+    const trimmed = prompt.trim();
+    if (trimmed.length === 0) {
+      // Empty prompt — silently ignore. The catalog requires `prompt:
+      // .min(1)`, so calling the SDK here would throw a validation
+      // error instead of giving the user actionable feedback.
+      return;
+    }
+    if (!client) {
+      toast.warn('Connect to a server to generate.');
+      return;
+    }
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      // Snake_case catalog name (the SDK's `invokeTool` is the wire-shape
+      // entry point). Job progress + completion arrive via the EventBus
+      // → `editorStore` / `jobsStore` once the provider's
+      // `client.events.subscribe(...)` wiring fires; this call site only
+      // owns the request kickoff + the optimistic "Generating…" toast.
+      await client.invokeTool('generate_image', {
+        prompt: trimmed,
+        strength,
+        batch_size: 1,
+        seed: 'random' as const,
+      });
+      toast.info('Generating…');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`Generate failed: ${message}`);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleMic = () => {
@@ -128,12 +164,18 @@ export function BottomPromptBar({ workspace, onSubmit }: BottomPromptBarProps) {
           <Text className="text-body-strong text-text-primary">Enhance</Text>
         </Button>
 
-        {/* Primary — single-accent CTA. Label switches per workspace. */}
+        {/* Primary — single-accent CTA. Label switches per workspace.
+            Disabled while a generate request is in flight to prevent
+            duplicate kickoffs (the SDK forwards the call to the
+            transport synchronously; a double-tap would queue two
+            separate jobs). */}
         <Button
           variant="default"
           size="default"
           onPress={handleSubmit}
+          disabled={submitting}
           accessibilityLabel={primaryLabel}
+          accessibilityState={{ disabled: submitting, busy: submitting }}
           className="h-10 bg-accent-default px-4"
         >
           <Text className="text-body-strong text-canvas">{primaryLabel}</Text>

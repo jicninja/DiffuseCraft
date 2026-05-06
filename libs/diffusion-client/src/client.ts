@@ -71,6 +71,11 @@ import {
 } from "@diffusecraft/mcp-tools";
 
 import type {
+  ToolInput,
+  ToolName,
+  ToolOutput,
+} from "@diffusecraft/mcp-tools";
+import type {
   ClientCapabilities,
   ClientConfig,
   Logger,
@@ -158,6 +163,27 @@ export interface DiffuseCraftClient {
 
   /** Typed tool methods, one per catalog tool (FR-11 / FR-12, design §3 / §5). */
   tools: TypedToolMethods;
+
+  /**
+   * String-keyed tool dispatch (parallels {@link tools}). Forwards `name`
+   * and `args` directly to the underlying transport's `send`. Useful for
+   * adapters / generic surfaces that need to call a tool by its
+   * snake_case catalog name (e.g., the `DiffuseCraftClientLike` shape
+   * consumed by `@diffusecraft/core`'s store provider, where call sites
+   * speak the catalog vocabulary rather than the camelCased typed
+   * methods on `tools`). The generic parameters are advisory: pass a
+   * known `ToolName` to inherit catalog-derived input / output typing,
+   * or call with `unknown` args at consumers who only know the wire
+   * shape.
+   */
+  invokeTool<N extends ToolName>(
+    name: N,
+    args: ToolInput<N>,
+  ): Promise<ToolOutput<N>>;
+  invokeTool<TArgs = unknown, TResult = unknown>(
+    name: string,
+    args: TArgs,
+  ): Promise<TResult>;
 
   /** Typed resource readers, one namespace per catalog resource (FR-16+, design §3 / §6). */
   resources: TypedResourceReaders;
@@ -595,6 +621,36 @@ class DiffuseCraftClientImpl implements DiffuseCraftClient {
 
   getStatus(): ConnectionStatus {
     return this.bus.getStatus();
+  }
+
+  // -------------------------------------------------------------------
+  // Generic tool dispatch
+  // -------------------------------------------------------------------
+
+  /**
+   * String-keyed tool dispatch — forwards directly to the underlying
+   * transport's `send`. Mirrors the catalog name (`generate_image`,
+   * `undo`, etc.) rather than the camelCased shape on `this.tools`,
+   * which is the vocabulary `@diffusecraft/core`'s `DiffuseCraftClientLike`
+   * shape speaks. Bypasses the `createToolMethods` validation +
+   * abort-cascade layer because the typed-methods surface (`this.tools`)
+   * is the authoritative entry point for ergonomic callers; this method
+   * is the thin passthrough adapters / generic surfaces use.
+   */
+  invokeTool<N extends ToolName>(
+    name: N,
+    args: ToolInput<N>,
+  ): Promise<ToolOutput<N>>;
+  invokeTool<TArgs = unknown, TResult = unknown>(
+    name: string,
+    args: TArgs,
+  ): Promise<TResult>;
+  async invokeTool(name: string, args: unknown): Promise<unknown> {
+    this.assertNotDisposed("invokeTool");
+    return this.transport.send(
+      name as ToolName,
+      args as ToolInput<ToolName>,
+    );
   }
 
   // -------------------------------------------------------------------

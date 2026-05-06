@@ -169,3 +169,14 @@ export const useHasTool = (name: string) =>
  */
 export const useStoresClient = (): DiffuseCraftClientLike | null =>
   useContext(StoresClientContext);
+
+/**
+ * Public alias for {@link useStoresClient} — the spelling app code uses
+ * (e.g., screens that need to call `client.invokeTool('generate_image',
+ * ...)` directly). Same semantics: returns `null` outside the provider
+ * or while the provider is wired with a `null` client. The "stores"
+ * spelling is internal vocabulary; "diffusion-client" matches what the
+ * SDK package is called.
+ */
+export const useDiffusionClient = (): DiffuseCraftClientLike | null =>
+  useContext(StoresClientContext);

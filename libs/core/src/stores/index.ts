@@ -115,6 +115,8 @@ export {
   useHistoryStore,
   useMcpCatalogStore,
   useHasTool,
+  useStoresClient,
+  useDiffusionClient,
   type EqualityFn,
 } from './hooks';
 
