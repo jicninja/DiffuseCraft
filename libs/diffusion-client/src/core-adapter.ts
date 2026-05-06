@@ -31,7 +31,7 @@
 import { catalog } from "@diffusecraft/mcp-tools";
 import type { EventName, EventPayload } from "@diffusecraft/mcp-tools";
 
-import type { DiffuseCraftClient } from "./client.js";
+import type { DiffuseCraftClient } from "./client";
 
 /**
  * Structural mirror of `@diffusecraft/core/src/stores/shared/types.ts`.

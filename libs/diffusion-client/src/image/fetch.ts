@@ -53,8 +53,8 @@
 
 import type { ImageEnvelope, ResourceUri } from "@diffusecraft/mcp-tools";
 
-import { ClientValidationError, ConnectionError } from "../errors.js";
-import type { Transport } from "../transports/transport.js";
+import { ClientValidationError, ConnectionError } from "../errors";
+import type { Transport } from "../transports/transport";
 
 /**
  * Maximum number of `ref → readResource → envelope` hops the helper will

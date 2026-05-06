@@ -46,11 +46,11 @@ import type {
 import type { ToolCategory } from "@diffusecraft/mcp-tools";
 import type { z } from "zod";
 
-import { ClientValidationError } from "../errors.js";
+import { ClientValidationError } from "../errors";
 import type {
   Transport,
   TransportSendOptions,
-} from "../transports/transport.js";
+} from "../transports/transport";
 
 // ---------------------------------------------------------------------------
 // snake_case → camelCase mapping (compile-time + runtime)

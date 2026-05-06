@@ -13,14 +13,14 @@ export type {
   TransportSamplingRequest,
   TransportSamplingResponse,
   TransportSamplingHandler,
-} from "./transport.js";
+} from "./transport";
 
 /**
  * In-memory transport (FR-9 / FR-10, B.1). Public so embedding hosts
  * (MeshCraft, integration tests) can construct it directly without
  * routing through `createDiffuseCraftClient`.
  */
-export { InMemoryTransport, createInMemoryTransport } from "./in-memory.js";
+export { InMemoryTransport, createInMemoryTransport } from "./in-memory";
 
 /**
  * stdio transport (FR-8 / FR-10, B.2). Public so Node-side hosts (CLI
@@ -28,8 +28,8 @@ export { InMemoryTransport, createInMemoryTransport } from "./in-memory.js";
  * environments must not import this — it depends on `child_process`
  * via `@modelcontextprotocol/sdk/client/stdio`.
  */
-export { StdioTransport, createStdioTransport } from "./stdio.js";
-export type { StdioTransportConfig } from "./stdio.js";
+export { StdioTransport, createStdioTransport } from "./stdio";
+export type { StdioTransportConfig } from "./stdio";
 
 /**
  * HTTP transport (FR-7 / FR-10, B.3). Wraps
@@ -38,8 +38,8 @@ export type { StdioTransportConfig } from "./stdio.js";
  * Node 18+ and modern browsers ship the required `fetch` + `URL` globals.
  * Reconnect orchestration (FR-29 / FR-30 / FR-31) lives in B.4.
  */
-export { HttpTransport, createHttpTransport } from "./http.js";
-export type { HttpTransportConfig } from "./http.js";
+export { HttpTransport, createHttpTransport } from "./http";
+export type { HttpTransportConfig } from "./http";
 
 /**
  * Reconnect orchestration (FR-29 / FR-30 / FR-31, B.4). Public surface
@@ -48,5 +48,5 @@ export type { HttpTransportConfig } from "./http.js";
  * `getStatus()` projection can speak the same vocabulary as the
  * transport-level emitter.
  */
-export { Reconnector, RECONNECT_FAILED_CAUSE } from "./reconnect.js";
-export type { ReconnectConfig, ReconnectStatus, ReconnectorParams, ReconnectOutcome } from "./reconnect.js";
+export { Reconnector, RECONNECT_FAILED_CAUSE } from "./reconnect";
+export type { ReconnectConfig, ReconnectStatus, ReconnectorParams, ReconnectOutcome } from "./reconnect";

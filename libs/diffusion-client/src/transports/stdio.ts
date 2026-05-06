@@ -94,14 +94,14 @@ import type {
   ToolOutput,
 } from "@diffusecraft/mcp-tools";
 
-import { ConnectionError } from "../errors.js";
-import { mapToMcpCapabilities } from "../shared/capabilities-map.js";
+import { ConnectionError } from "../errors";
+import { mapToMcpCapabilities } from "../shared/capabilities-map";
 import {
   isErrorToolResult,
   serverErrorFromIsErrorResult,
   wrapServerError,
-} from "./_errors.js";
-import { appendResourceQuery } from "./_query.js";
+} from "./_errors";
+import { appendResourceQuery } from "./_query";
 import type {
   HandshakeResult,
   ResourceReadQuery,
@@ -110,7 +110,7 @@ import type {
   TransportSamplingHandler,
   TransportSendOptions,
   Unsubscribe,
-} from "./transport.js";
+} from "./transport";
 
 // ---------------------------------------------------------------------------
 // Configuration

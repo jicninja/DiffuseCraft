@@ -79,31 +79,31 @@ import type {
   ClientCapabilities,
   ClientConfig,
   Logger,
-} from "./config.js";
-import { parseClientConfig } from "./config.js";
-import { ConnectionError } from "./errors.js";
-import { EventBus } from "./events/index.js";
+} from "./config";
+import { parseClientConfig } from "./config";
+import { ConnectionError } from "./errors";
+import { EventBus } from "./events/index";
 import type {
   ConnectionStatus,
   ConnectionStatusListener,
   EventListener,
   Unsubscribe,
-} from "./events/index.js";
-import { fetchImage, uploadImage } from "./image/index.js";
-import type { UploadImageOptions } from "./image/index.js";
-import { PairingClient } from "./pairing/index.js";
-import { createResourceReaders } from "./resources/index.js";
-import type { TypedResourceReaders } from "./resources/index.js";
-import { SamplingForwarder } from "./sampling/index.js";
-import type { SamplingHandler } from "./sampling/index.js";
-import { createToolMethods } from "./tools/index.js";
-import type { TypedToolMethods } from "./tools/index.js";
+} from "./events/index";
+import { fetchImage, uploadImage } from "./image/index";
+import type { UploadImageOptions } from "./image/index";
+import { PairingClient } from "./pairing/index";
+import { createResourceReaders } from "./resources/index";
+import type { TypedResourceReaders } from "./resources/index";
+import { SamplingForwarder } from "./sampling/index";
+import type { SamplingHandler } from "./sampling/index";
+import { createToolMethods } from "./tools/index";
+import type { TypedToolMethods } from "./tools/index";
 import {
   HttpTransport,
   InMemoryTransport,
   StdioTransport,
-} from "./transports/index.js";
-import type { Transport } from "./transports/index.js";
+} from "./transports/index";
+import type { Transport } from "./transports/index";
 import type { ImageEnvelope, ImageFormat } from "@diffusecraft/mcp-tools";
 import type {
   DiscoverOptions,
@@ -112,7 +112,7 @@ import type {
   PairResult,
   QrPayload,
   RequestPairOptions,
-} from "./pairing/index.js";
+} from "./pairing/index";
 
 // ---------------------------------------------------------------------------
 // Public interface

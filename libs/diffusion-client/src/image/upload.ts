@@ -34,8 +34,8 @@
 
 import type { ImageFormat, ToolInput, ToolOutput } from "@diffusecraft/mcp-tools";
 
-import { ClientValidationError, ConnectionError } from "../errors.js";
-import type { Transport } from "../transports/transport.js";
+import { ClientValidationError, ConnectionError } from "../errors";
+import type { Transport } from "../transports/transport";
 
 /**
  * Per-call options for {@link uploadImage}. `width` / `height` are

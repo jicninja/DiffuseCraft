@@ -23,7 +23,7 @@
  * tail) plus the extracted token.
  */
 
-import type { DiscoveredBackend } from "../adapters/mdns.js";
+import type { DiscoveredBackend } from "../adapters/mdns";
 
 export type { DiscoveredBackend };
 

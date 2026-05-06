@@ -88,7 +88,7 @@ import type {
   ToolOutput,
 } from "@diffusecraft/mcp-tools";
 
-import { ConnectionError } from "../errors.js";
+import { ConnectionError } from "../errors";
 import type {
   HandshakeResult,
   ResourceReadQuery,
@@ -97,7 +97,7 @@ import type {
   TransportSamplingHandler,
   TransportSendOptions,
   Unsubscribe,
-} from "./transport.js";
+} from "./transport";
 
 // ---------------------------------------------------------------------------
 // Structural narrowing helpers

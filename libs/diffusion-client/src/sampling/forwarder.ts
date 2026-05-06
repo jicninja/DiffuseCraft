@@ -38,12 +38,12 @@
  * accidentally clear a freshly attached handler).
  */
 
-import { SamplingNotSupportedError } from "../errors.js";
+import { SamplingNotSupportedError } from "../errors";
 import type {
   Transport,
   TransportSamplingRequest,
   TransportSamplingResponse,
-} from "../transports/transport.js";
+} from "../transports/transport";
 
 /**
  * Consumer-facing sampling handler signature surfaced via

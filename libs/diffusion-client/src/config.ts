@@ -22,10 +22,10 @@
 
 import { z } from "zod";
 import { ClientCapabilities as ClientCapabilitiesSchema } from "@diffusecraft/mcp-tools";
-import { ClientValidationError } from "./errors.js";
-import type { MdnsAdapter as RuntimeMdnsAdapter } from "./adapters/mdns.js";
-import type { SecureStoreAdapter as RuntimeSecureStoreAdapter } from "./adapters/secure-store.js";
-import type { QrScannerAdapter as RuntimeQrScannerAdapter } from "./adapters/qr-scanner.js";
+import { ClientValidationError } from "./errors";
+import type { MdnsAdapter as RuntimeMdnsAdapter } from "./adapters/mdns";
+import type { SecureStoreAdapter as RuntimeSecureStoreAdapter } from "./adapters/secure-store";
+import type { QrScannerAdapter as RuntimeQrScannerAdapter } from "./adapters/qr-scanner";
 
 // ---------------------------------------------------------------------------
 // Re-exported / declared interfaces

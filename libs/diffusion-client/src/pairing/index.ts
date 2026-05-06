@@ -4,8 +4,8 @@
  * import as `import { PairingClient, ... } from "@diffusecraft/diffusion-client"`.
  */
 
-export { PairingClient } from "./client.js";
-export type { PairingClientOptions } from "./client.js";
+export { PairingClient } from "./client";
+export type { PairingClientOptions } from "./client";
 export type {
   DiscoverOptions,
   DiscoveredBackend,
@@ -13,4 +13,4 @@ export type {
   PairResult,
   QrPayload,
   RequestPairOptions,
-} from "./types.js";
+} from "./types";

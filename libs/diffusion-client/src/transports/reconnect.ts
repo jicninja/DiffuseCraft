@@ -31,7 +31,7 @@
  * "testing disabled until v1") and what keeps `http.ts` readable.
  */
 
-import { ConnectionError } from "../errors.js";
+import { ConnectionError } from "../errors";
 
 // Cancellation contract:
 //

@@ -49,20 +49,20 @@ import {
   PairingRejectedError,
   ServerError,
   type PairingRejectionReason,
-} from "../errors.js";
+} from "../errors";
 import {
   DEFAULT_MDNS_SERVICE_NAME,
   type DiscoveredBackend,
   type MdnsAdapter,
-} from "../adapters/mdns.js";
-import type { Logger } from "../config.js";
+} from "../adapters/mdns";
+import type { Logger } from "../config";
 import type {
   DiscoverOptions,
   ManualPayload,
   PairResult,
   QrPayload,
   RequestPairOptions,
-} from "./types.js";
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Constructor options

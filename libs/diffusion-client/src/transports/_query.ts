@@ -12,7 +12,7 @@
  * sibling transport files but is NOT part of the SDK's public surface.
  */
 
-import type { ResourceReadQuery } from "./transport.js";
+import type { ResourceReadQuery } from "./transport";
 
 /**
  * Append `?since` / `?fields` / `?cursor` query parameters to a resource URI.

@@ -12,11 +12,11 @@ export {
   createToolMethods,
   toCamelCase,
   validateToolInput,
-} from "./generated.js";
+} from "./generated";
 
 export type {
   CamelCase,
   TypedToolMethods,
   ToolCallOptions,
   ToolMethodWrappers,
-} from "./generated.js";
+} from "./generated";

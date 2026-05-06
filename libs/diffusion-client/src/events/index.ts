@@ -5,11 +5,11 @@
  * (design.md §3) on top of it.
  */
 
-export { EventBus } from "./bus.js";
-export type { EventBusOptions, HttpStatusSource } from "./bus.js";
+export { EventBus } from "./bus";
+export type { EventBusOptions, HttpStatusSource } from "./bus";
 export type {
   ConnectionStatus,
   ConnectionStatusListener,
   EventListener,
   Unsubscribe,
-} from "./types.js";
+} from "./types";

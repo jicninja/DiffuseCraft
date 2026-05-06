@@ -12,8 +12,8 @@ export * from "./errors";
  * into a single typed client surface — the entry point every consumer
  * uses.
  */
-export { createDiffuseCraftClient } from "./client.js";
-export type { DiffuseCraftClient } from "./client.js";
+export { createDiffuseCraftClient } from "./client";
+export type { DiffuseCraftClient } from "./client";
 
 /**
  * `Transport` interface (FR-6 / design.md §4). Re-exported on the public
@@ -89,13 +89,13 @@ export {
   createToolMethods,
   toCamelCase,
   validateToolInput,
-} from "./tools/index.js";
+} from "./tools/index";
 export type {
   CamelCase,
   TypedToolMethods,
   ToolCallOptions,
   ToolMethodWrappers,
-} from "./tools/index.js";
+} from "./tools/index";
 
 /**
  * Generated resource readers (FR-16 / FR-17 / FR-18, design.md §3 + §6,
@@ -113,7 +113,7 @@ export {
   fillResourceUri,
   isPaginatedSchema,
   parseResourceUri,
-} from "./resources/index.js";
+} from "./resources/index";
 export type {
   ParamIterator,
   ParamReader,
@@ -125,7 +125,7 @@ export type {
   TypedResourceReaders,
   ZeroArgIterator,
   ZeroArgReader,
-} from "./resources/index.js";
+} from "./resources/index";
 
 /**
  * Buffered event bus (FR-19 / FR-20 / FR-21, design.md §3 + §7, E.1 + E.2 +
@@ -138,14 +138,14 @@ export type {
  * subscriptions are gated by the `server-architecture` upstream
  * notification-publication gap (the bus logs a warning and proceeds).
  */
-export { EventBus } from "./events/index.js";
+export { EventBus } from "./events/index";
 export type {
   ConnectionStatus,
   ConnectionStatusListener,
   EventBusOptions,
   EventListener,
   HttpStatusSource,
-} from "./events/index.js";
+} from "./events/index";
 
 /**
  * Pairing client (FR-22 / FR-23 / FR-24 / FR-25, design.md §9, F.1–F.5).
@@ -158,7 +158,7 @@ export type {
  * field (Phase B.6) holds an instance constructed from the consumer's
  * adapters.
  */
-export { PairingClient } from "./pairing/index.js";
+export { PairingClient } from "./pairing/index";
 export type {
   DiscoverOptions,
   DiscoveredBackend,
@@ -167,7 +167,7 @@ export type {
   PairResult,
   QrPayload,
   RequestPairOptions,
-} from "./pairing/index.js";
+} from "./pairing/index";
 
 /**
  * mDNS adapter constants + auxiliary types (FR-22, design §12, F.1).
@@ -177,8 +177,8 @@ export type {
  * {@link DEFAULT_MDNS_SERVICE_NAME} is the canonical service type the
  * server advertises (`_diffusecraft._tcp.local`).
  */
-export { DEFAULT_MDNS_SERVICE_NAME } from "./adapters/mdns.js";
-export type { MdnsScanOptions } from "./adapters/mdns.js";
+export { DEFAULT_MDNS_SERVICE_NAME } from "./adapters/mdns";
+export type { MdnsScanOptions } from "./adapters/mdns";
 
 /**
  * Secure-store adapter (G.1, FR-26 / FR-28, design §12). Consumers
@@ -188,7 +188,7 @@ export type { MdnsScanOptions } from "./adapters/mdns.js";
  * `config.ts` (above) is structurally identical — both spellings
  * resolve to the same shape.
  */
-export { InMemorySecureStoreAdapter } from "./adapters/secure-store.js";
+export { InMemorySecureStoreAdapter } from "./adapters/secure-store";
 
 /**
  * QR-scanner adapter (G.2, FR-22, design §12). Consumers supply a
@@ -197,7 +197,7 @@ export { InMemorySecureStoreAdapter } from "./adapters/secure-store.js";
  * shape is re-exported here so consumers can declare adapter
  * implementations against the canonical type.
  */
-export type { QrScannerScanOptions } from "./adapters/qr-scanner.js";
+export type { QrScannerScanOptions } from "./adapters/qr-scanner";
 
 /**
  * Image envelope helpers (H.1 + H.2, FR-34 / FR-35, design §11).
@@ -207,8 +207,8 @@ export type { QrScannerScanOptions } from "./adapters/qr-scanner.js";
  * so test harnesses + advanced consumers can call them without going
  * through the full client.
  */
-export { fetchImage, uploadImage } from "./image/index.js";
-export type { UploadImageOptions } from "./image/index.js";
+export { fetchImage, uploadImage } from "./image/index";
+export type { UploadImageOptions } from "./image/index";
 
 /**
  * Sampling forwarder (Phase I, FR-2 sampling slot, design.md §10).
@@ -221,8 +221,8 @@ export type { UploadImageOptions } from "./image/index.js";
  * `SamplingHandler` is the consumer-facing handler signature surfaced
  * via `client.sampling.onSample(handler)`.
  */
-export { SamplingForwarder } from "./sampling/index.js";
-export type { SamplingHandler } from "./sampling/index.js";
+export { SamplingForwarder } from "./sampling/index";
+export type { SamplingHandler } from "./sampling/index";
 
 /**
  * Token-provider helpers (K.1 + K.2 + K.3, FR-26 / FR-27 / FR-23,
@@ -246,11 +246,11 @@ export {
   TokenCache,
   TokenStore,
   TokenRotationHook,
-} from "./shared/token-provider.js";
+} from "./shared/token-provider";
 export type {
   TokenRotationEvent,
   TokenRotationListener,
-} from "./shared/token-provider.js";
+} from "./shared/token-provider";
 
 /**
  * Catalog → MCP capability mapping (J.1, FR-32, design.md §10.3).
@@ -258,11 +258,11 @@ export type {
  * exact MCP wire shape advertised at handshake without going through
  * the full transport.
  */
-export { mapToMcpCapabilities } from "./shared/capabilities-map.js";
+export { mapToMcpCapabilities } from "./shared/capabilities-map";
 export type {
   McpClientCapabilities,
   MapToMcpCapabilitiesInput,
-} from "./shared/capabilities-map.js";
+} from "./shared/capabilities-map";
 
 /**
  * `@diffusecraft/core` interop adapter. Projects the SDK's typed
@@ -272,4 +272,4 @@ export type {
  * SDK client and pass the result to the provider (see README §"Wiring
  * with @diffusecraft/core").
  */
-export { toCoreClient } from "./core-adapter.js";
+export { toCoreClient } from "./core-adapter";

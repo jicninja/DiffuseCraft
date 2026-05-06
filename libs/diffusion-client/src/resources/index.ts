@@ -14,7 +14,7 @@ export {
   fillResourceUri,
   isPaginatedSchema,
   parseResourceUri,
-} from "./generated.js";
+} from "./generated";
 
 export type {
   ParamIterator,
@@ -27,4 +27,4 @@ export type {
   TypedResourceReaders,
   ZeroArgIterator,
   ZeroArgReader,
-} from "./generated.js";
+} from "./generated";

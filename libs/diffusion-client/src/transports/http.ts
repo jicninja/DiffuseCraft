@@ -102,23 +102,23 @@ import type {
   ToolOutput,
 } from "@diffusecraft/mcp-tools";
 
-import type { TokenProvider } from "../config.js";
-import { ConnectionError } from "../errors.js";
-import { mapToMcpCapabilities } from "../shared/capabilities-map.js";
-import { TokenCache } from "../shared/token-provider.js";
+import type { TokenProvider } from "../config";
+import { ConnectionError } from "../errors";
+import { mapToMcpCapabilities } from "../shared/capabilities-map";
+import { TokenCache } from "../shared/token-provider";
 import {
   isErrorToolResult,
   serverErrorFromIsErrorResult,
   wrapServerError,
-} from "./_errors.js";
-import { appendResourceQuery } from "./_query.js";
+} from "./_errors";
+import { appendResourceQuery } from "./_query";
 import {
   RECONNECT_FAILED_CAUSE,
   Reconnector,
   reconnectFailedError,
   type ReconnectConfig,
   type ReconnectStatus,
-} from "./reconnect.js";
+} from "./reconnect";
 import type {
   HandshakeResult,
   ResourceReadQuery,
@@ -127,7 +127,7 @@ import type {
   TransportSamplingHandler,
   TransportSendOptions,
   Unsubscribe,
-} from "./transport.js";
+} from "./transport";
 
 // ---------------------------------------------------------------------------
 // Configuration

@@ -48,7 +48,7 @@
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-import { ServerError, type ConnectionTransportKind } from "../errors.js";
+import { ServerError, type ConnectionTransportKind } from "../errors";
 
 // ---------------------------------------------------------------------------
 // Tool-result `isError` detection

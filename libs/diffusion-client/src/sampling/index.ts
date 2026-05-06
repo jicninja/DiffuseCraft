@@ -8,5 +8,5 @@
  * to the transport's MCP sampling channel.
  */
 
-export { SamplingForwarder } from "./forwarder.js";
-export type { SamplingHandler } from "./forwarder.js";
+export { SamplingForwarder } from "./forwarder";
+export type { SamplingHandler } from "./forwarder";

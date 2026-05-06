@@ -7,5 +7,5 @@
  * one import.
  */
 
-export { fetchImage } from "./fetch.js";
-export { uploadImage, type UploadImageOptions } from "./upload.js";
+export { fetchImage } from "./fetch";
+export { uploadImage, type UploadImageOptions } from "./upload";

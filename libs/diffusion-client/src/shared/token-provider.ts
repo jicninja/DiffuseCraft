@@ -32,8 +32,8 @@
  * `DiffuseCraftClient` (Phase B.6).
  */
 
-import type { TokenProvider } from "../config.js";
-import type { SecureStoreAdapter } from "../adapters/secure-store.js";
+import type { TokenProvider } from "../config";
+import type { SecureStoreAdapter } from "../adapters/secure-store";
 
 // ---------------------------------------------------------------------------
 // K.1 — TokenCache

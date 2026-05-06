@@ -94,12 +94,12 @@ import { catalog } from "@diffusecraft/mcp-tools";
 import type { ResourceUri } from "@diffusecraft/mcp-tools";
 import { z } from "zod";
 
-import { ClientValidationError } from "../errors.js";
+import { ClientValidationError } from "../errors";
 import type {
   ResourceReadQuery,
   Transport,
   TransportReadResourceOptions,
-} from "../transports/transport.js";
+} from "../transports/transport";
 
 // ---------------------------------------------------------------------------
 // Public option / shape types

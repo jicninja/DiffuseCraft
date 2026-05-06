@@ -80,14 +80,14 @@
 
 import type { EventName, EventPayload } from "@diffusecraft/mcp-tools";
 
-import type { Logger } from "../config.js";
-import type { Transport, Unsubscribe } from "../transports/transport.js";
+import type { Logger } from "../config";
+import type { Transport, Unsubscribe } from "../transports/transport";
 
 import type {
   ConnectionStatus,
   ConnectionStatusListener,
   EventListener,
-} from "./types.js";
+} from "./types";
 
 // ---------------------------------------------------------------------------
 // Wire-level helpers
