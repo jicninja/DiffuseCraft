@@ -45,10 +45,12 @@
 
 ## Phase D — Resource readers
 
-- [ ] **D.1** Build script: emit `resources/generated.ts` with one method per resource URI. **(M)**
-- [ ] **D.2** `?since` and `?fields` query param support. **(S)**
-- [ ] **D.3** Pagination iterator: `for await (const item of client.resources.history.iterate(docId))`. **(M)**
-- [ ] **D.4** Tests: read with no query; with since; with fields; pagination. **(S)**
+- [x] **D.1** Build script: emit `resources/generated.ts` with one method per resource URI. **(M)**
+- [x] **D.2** `?since` and `?fields` query param support. **(S)**
+- [x] **D.3** Pagination iterator: `for await (const item of client.resources.history.iterate(docId))`. **(M)**
+- [x]* **D.4** Tests: read with no query; with since; with fields; pagination. **(S)**
+
+> **Deferred per testing.md.**
 
 ## Phase E — Event bus
 

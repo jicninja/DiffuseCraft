@@ -15,9 +15,15 @@
 import type { ResourceReadQuery } from "./transport.js";
 
 /**
- * Append `?since` / `?fields` query parameters to a resource URI. Empty /
- * undefined queries leave the URI untouched. Multi-value `fields` are joined
- * with `,` (matching `mcp-tool-catalog` FR-46's sparse-fieldset shape).
+ * Append `?since` / `?fields` / `?cursor` query parameters to a resource URI.
+ * Empty / undefined queries leave the URI untouched. Multi-value `fields` are
+ * joined with `,` (matching `mcp-tool-catalog` FR-46's sparse-fieldset shape).
+ *
+ * `cursor` is forwarded for pagination (FR-18 / D.3); the server-side resource
+ * handlers (`libs/server/src/lib/resources/*`) parse it via the same
+ * `query['cursor']` slot they use today. The `iterate(...)` helpers in
+ * `resources/generated.ts` thread `next_cursor` through this helper without
+ * the consumer touching the URL.
  *
  * The function is URI-format-agnostic — it works with both the
  * `diffusecraft://...` resource URI form and ordinary HTTP URLs, picking the
@@ -35,6 +41,9 @@ export function appendResourceQuery(
   }
   if (query.fields !== undefined && query.fields.length > 0) {
     params.push(`fields=${encodeURIComponent(query.fields.join(","))}`);
+  }
+  if (query.cursor !== undefined) {
+    params.push(`cursor=${encodeURIComponent(query.cursor)}`);
   }
   if (params.length === 0) return uri;
   const sep = uri.includes("?") ? "&" : "?";

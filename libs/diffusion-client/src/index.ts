@@ -85,3 +85,33 @@ export type {
   ToolCallOptions,
   ToolMethodWrappers,
 } from "./tools/index.js";
+
+/**
+ * Generated resource readers (FR-16 / FR-17 / FR-18, design.md §3 + §6,
+ * D.1 + D.2 + D.3). `TypedResourceReaders` is the namespace tree the
+ * `DiffuseCraftClient.resources` field (Phase B.6) holds, built at
+ * construction time by `createResourceReaders(transport)`. Per-call
+ * `ResourceReadOptions` carry `since` / `fields` (FR-17, D.2) and an
+ * optional `AbortSignal`; paginated namespaces additionally expose
+ * `iterate(...)` async iterators (FR-18, D.3) that thread `next_cursor`
+ * through successive reads.
+ */
+export {
+  camelCaseSegments,
+  createResourceReaders,
+  fillResourceUri,
+  isPaginatedSchema,
+  parseResourceUri,
+} from "./resources/index.js";
+export type {
+  ParamIterator,
+  ParamReader,
+  ParsedResourceUri,
+  PaginatedPage,
+  ResourceIterateOptions,
+  ResourceNamespace,
+  ResourceReadOptions,
+  TypedResourceReaders,
+  ZeroArgIterator,
+  ZeroArgReader,
+} from "./resources/index.js";

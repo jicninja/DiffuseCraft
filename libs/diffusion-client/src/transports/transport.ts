@@ -83,15 +83,29 @@ export interface TransportReadResourceOptions {
 }
 
 /**
- * Resource read query parameters (`?since`, `?fields`) per FR-17. Passed
- * through verbatim by the transport; the server interprets them per
- * `mcp-tool-catalog` FR-39 / FR-46.
+ * Resource read query parameters (`?since`, `?fields`, `?cursor`) per FR-17 /
+ * FR-18. Passed through verbatim by the transport; the server interprets them
+ * per `mcp-tool-catalog` FR-39 / FR-46.
+ *
+ * `since` and `fields` are the FR-17 sparse / delta knobs. `cursor` is the
+ * pagination knob that the SDK's `iterate(...)` async-iterable helpers
+ * (D.3 — `client.resources.<ns>.iterate(...)`) thread through successive
+ * pages — the server returns `next_cursor` on the response envelope and the
+ * iterator forwards it as `?cursor=<...>` on the next call. The transport
+ * itself does not interpret cursors; it only round-trips the value.
  */
 export interface ResourceReadQuery {
   /** RFC-3339 / ISO timestamp; resource returns deltas after this point. */
   since?: string;
   /** Sparse-fieldset selector; resource projects only these fields. */
   fields?: string[];
+  /**
+   * Opaque pagination cursor. The first page omits this; subsequent pages
+   * pass the `next_cursor` returned by the previous page. The
+   * `iterate(...)` helpers in `resources/generated.ts` (D.3) own the
+   * paging loop; consumer code rarely needs to set this directly.
+   */
+  cursor?: string;
 }
 
 // ---------------------------------------------------------------------------
