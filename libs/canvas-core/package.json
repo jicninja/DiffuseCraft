@@ -1,0 +1,22 @@
+{
+  "name": "@diffusecraft/canvas-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/__tests__/run-tests.ts"
+  },
+  "dependencies": {
+    "@diffusecraft/mcp-tools": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4"
+  }
+}

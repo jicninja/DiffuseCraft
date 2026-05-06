@@ -1,0 +1,15 @@
+# Flow 04-Documents. Requires status='connected' so the Documents tab is
+# the natural entry; deep link directly to /documents.
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=connected"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://documents"
+- waitForAnimationToEnd:
+    timeout: 800
+- takeScreenshot: ../captures/04-Documents/_latest

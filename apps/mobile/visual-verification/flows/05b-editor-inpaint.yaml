@@ -1,0 +1,14 @@
+# Flow 05b-Editor-Inpaint. Editor with workspace=Inpaint, chat closed.
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=connected"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://editor/mock-doc-1?workspace=inpaint"
+- waitForAnimationToEnd:
+    timeout: 1200
+- takeScreenshot: ../captures/05b-Editor-Inpaint/_latest

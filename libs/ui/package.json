@@ -1,0 +1,52 @@
+{
+  "name": "@diffusecraft/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./theme": "./src/theme/index.ts"
+  },
+  "scripts": {
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gorhom/bottom-sheet": "*",
+    "@rn-primitives/accordion": "*",
+    "@rn-primitives/alert-dialog": "*",
+    "@rn-primitives/avatar": "*",
+    "@rn-primitives/checkbox": "*",
+    "@rn-primitives/collapsible": "*",
+    "@rn-primitives/context-menu": "*",
+    "@rn-primitives/dialog": "*",
+    "@rn-primitives/dropdown-menu": "*",
+    "@rn-primitives/label": "*",
+    "@rn-primitives/popover": "*",
+    "@rn-primitives/portal": "*",
+    "@rn-primitives/progress": "*",
+    "@rn-primitives/radio-group": "*",
+    "@rn-primitives/select": "*",
+    "@rn-primitives/separator": "*",
+    "@rn-primitives/slider": "*",
+    "@rn-primitives/slot": "*",
+    "@rn-primitives/switch": "*",
+    "@rn-primitives/tabs": "*",
+    "@rn-primitives/tooltip": "*",
+    "class-variance-authority": "*",
+    "clsx": "*",
+    "lucide-react-native": "*",
+    "nativewind": "*",
+    "react": "*",
+    "react-native": "*",
+    "react-native-gesture-handler": "*",
+    "react-native-reanimated": "*",
+    "sonner-native": "*",
+    "tailwind-merge": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

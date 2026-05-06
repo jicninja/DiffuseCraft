@@ -1,0 +1,1 @@
+export { eventCatalog } from "./manifest";

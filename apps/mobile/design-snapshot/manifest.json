@@ -1,0 +1,34 @@
+{
+  "snapshot_version": "1.0.0",
+  "source_pen_path": "/Users/ignaciocastro/ia/DiffuseCraft/untitled.pen",
+  "extracted_at": "2026-05-03T00:00:00Z",
+  "extracted_by": "Claude Code orchestrator session via pencil MCP",
+  "tokens_file": "tokens.json",
+  "artboards": [
+    { "label": "01-Splash", "pen_node_id": "cC63N", "size": [1366, 1024], "preview": "01-Splash/preview.png", "preview_status": "ok" },
+    { "label": "02-Pairing-mDNS", "pen_node_id": "DuwsT", "size": [1366, 1024], "preview": "02-Pairing-mDNS/preview.png", "preview_status": "ok" },
+    { "label": "02b-Pairing-QR", "pen_node_id": "AVbKN", "size": [1366, 1024], "preview": "02b-Pairing-QR/preview.png", "preview_status": "ok" },
+    { "label": "02c-Pairing-Code", "pen_node_id": "ABiPH", "size": [1366, 1024], "preview": "02c-Pairing-Code/preview.png", "preview_status": "ok" },
+    { "label": "02d-Pairing-Manual", "pen_node_id": "F4UtV", "size": [1366, 1024], "preview": "02d-Pairing-Manual/preview.png", "preview_status": "ok" },
+    { "label": "03-ServerPicker", "pen_node_id": "Pu9YL", "size": [1366, 1024], "preview": "03-ServerPicker/preview.png", "preview_status": "ok" },
+    { "label": "04-Documents", "pen_node_id": "W9bOD", "size": [1366, 1024], "preview": null, "preview_status": "export_failed", "preview_status_note": "pencil MCP export_nodes returned 'wrong .pen file' error; structural data captured in batch_get; re-extract via dedicated tools/snapshot-pen.ts script when implemented" },
+    { "label": "05-Editor-Generate", "pen_node_id": "C5VPY", "size": [1366, 1024], "preview": null, "preview_status": "export_failed" },
+    { "label": "05b-Editor-Inpaint", "pen_node_id": "MwD6P", "size": [1366, 1024], "preview": null, "preview_status": "export_failed" },
+    { "label": "05c-Editor-Live", "pen_node_id": "4B3Ir", "size": [1366, 1024], "preview": null, "preview_status": "export_failed" },
+    { "label": "05d-Editor-Chat-Open", "pen_node_id": "ZciqR", "size": [1366, 1024], "preview": null, "preview_status": "export_failed" },
+    { "label": "06-Settings", "pen_node_id": "DWAvm", "size": [1366, 1024], "preview": null, "preview_status": "export_failed" },
+    { "label": "06a-Settings-Connection", "pen_node_id": "MObHo", "size": [1366, 1024], "preview": null, "preview_status": "export_failed" },
+    { "label": "_components", "pen_node_id": "kzxfD", "size": [1366, 1024], "preview": "_components/preview.png", "preview_status": "ok", "role": "Z-Components swatch board" }
+  ],
+  "summary": {
+    "total_artboards": 14,
+    "previews_ok": 7,
+    "previews_failed": 7,
+    "tokens_extracted": true,
+    "structural_data_captured_in_session": true
+  },
+  "next_steps": [
+    "tools/snapshot-pen.ts (planned in design-system-foundation T1) re-extracts the 7 missing previews via a dedicated, retry-aware script",
+    "If pencil MCP export_nodes remains flaky, fallback: use get_screenshot per node (single-node, returns inline image)"
+  ]
+}

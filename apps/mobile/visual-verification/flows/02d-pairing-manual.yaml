@@ -1,0 +1,15 @@
+# Flow 02d-Pairing-Manual. Manual host:port form; flow does not focus any
+# field to avoid cursor / focus-ring noise in the diff.
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=no-paired"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://pair/manual"
+- waitForAnimationToEnd:
+    timeout: 800
+- takeScreenshot: ../captures/02d-Pairing-Manual/_latest

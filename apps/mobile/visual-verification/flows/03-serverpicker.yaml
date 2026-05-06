@@ -1,0 +1,16 @@
+# Flow 03-ServerPicker. ServerPicker is the natural entry when the
+# connection store is in 'paired-no-active' (one or more paired studios but
+# none currently selected as active).
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=paired-no-active"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://servers"
+- waitForAnimationToEnd:
+    timeout: 800
+- takeScreenshot: ../captures/03-ServerPicker/_latest

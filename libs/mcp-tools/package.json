@@ -1,0 +1,24 @@
+{
+  "name": "@diffusecraft/mcp-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./catalog.json": "./dist/catalog.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:catalog": "tsx scripts/emit-json-schema.ts",
+    "test": "tsx src/__tests__/run-tests.ts"
+  },
+  "dependencies": {
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "zod-to-json-schema": "^3.23.0"
+  }
+}

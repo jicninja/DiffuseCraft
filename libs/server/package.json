@@ -1,0 +1,44 @@
+{
+  "name": "@diffusecraft/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:smoke": "tsx src/__tests__/smoke.ts",
+    "test:pairing": "tsx src/__tests__/pairing.ts",
+    "test:comfy": "tsx src/__tests__/comfy.ts",
+    "test:enhance": "tsx src/__tests__/enhance.ts",
+    "test:generation": "tsx src/__tests__/generation.ts",
+    "test:history": "tsx src/__tests__/history.ts",
+    "test:paint-strokes": "tsx src/__tests__/paint-strokes.ts",
+    "test:selection": "tsx src/__tests__/selection.ts",
+    "test:transform-layer": "tsx src/__tests__/transform-layer.ts",
+    "test:mask-handlers": "tsx src/__tests__/mask-handlers.ts",
+    "test": "pnpm run test:smoke && pnpm run test:pairing && pnpm run test:comfy && pnpm run test:enhance && pnpm run test:generation && pnpm run test:history && pnpm run test:paint-strokes && pnpm run test:selection && pnpm run test:transform-layer && pnpm run test:mask-handlers"
+  },
+  "dependencies": {
+    "@diffusecraft/core": "workspace:*",
+    "@diffusecraft/mcp-tools": "workspace:*",
+    "zod": "^3.23.8"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "better-sqlite3": "^11.0.0",
+    "bonjour-service": "^1.2.1",
+    "fastify": "^4.27.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "ulid": "^2.3.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4"
+  }
+}

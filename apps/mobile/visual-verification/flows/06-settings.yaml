@@ -1,0 +1,15 @@
+# Flow 06-Settings. Settings index. Requires status='connected' so the
+# screen is reachable.
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=connected"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://settings"
+- waitForAnimationToEnd:
+    timeout: 800
+- takeScreenshot: ../captures/06-Settings/_latest

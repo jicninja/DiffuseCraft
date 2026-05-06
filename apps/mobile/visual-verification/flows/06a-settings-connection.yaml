@@ -1,0 +1,15 @@
+# Flow 06a-Settings-Connection. Settings detail page for the active
+# server / connection management.
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=connected"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://settings/connection"
+- waitForAnimationToEnd:
+    timeout: 800
+- takeScreenshot: ../captures/06a-Settings-Connection/_latest

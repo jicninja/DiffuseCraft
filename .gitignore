@@ -1,0 +1,68 @@
+# Node
+node_modules/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Build artifacts
+dist/
+build/
+out/
+.tsbuildinfo
+*.tsbuildinfo
+
+# Nx
+.nx/cache
+.nx/workspace-data
+
+# Expo
+.expo/
+.expo-shared/
+web-build/
+
+# Native
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Tests
+coverage/
+
+# Snapshot re-runs (the canonical snapshot is committed; re-run scratch goes here)
+apps/mobile/design-snapshot/_exports/
+
+# Temp
+tmp/
+*.tmp
+
+# visual-verification per-run outputs (FR-14)
+apps/mobile/visual-verification/captures/*
+!apps/mobile/visual-verification/captures/.gitkeep
+apps/mobile/visual-verification/report/*
+!apps/mobile/visual-verification/report/.gitkeep
+apps/mobile/visual-verification/scripts/__tests__/_fixtures/*.png
+apps/mobile/visual-verification/scripts/__tests__/_tmp/

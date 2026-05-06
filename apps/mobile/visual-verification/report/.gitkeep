@@ -1,0 +1,2 @@
+# report/ holds per-run diff PNGs, sidecar JSON, and the aggregated index
+# HTML. Everything here except this file is gitignored.

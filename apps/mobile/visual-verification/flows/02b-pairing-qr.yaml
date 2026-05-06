@@ -1,0 +1,14 @@
+# Flow 02b-Pairing-QR. Same as mDNS but lands on the QR tab.
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=no-paired"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://pair/qr"
+- waitForAnimationToEnd:
+    timeout: 800
+- takeScreenshot: ../captures/02b-Pairing-QR/_latest

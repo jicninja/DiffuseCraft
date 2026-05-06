@@ -1,0 +1,17 @@
+# Flow 01-Splash. The chrome's connectionStore stub starts at 'no-paired',
+# which causes a deep link to '/' to redirect immediately to '/pair'. To
+# capture the splash itself we first set the stub to 'unknown' via the
+# Debug deep link, then deep-link to root before the redirect resolves.
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=unknown"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://"
+- waitForAnimationToEnd:
+    timeout: 600
+- takeScreenshot: ../captures/01-Splash/_latest

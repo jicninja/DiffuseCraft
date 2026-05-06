@@ -1,0 +1,15 @@
+# Flow 02-Pairing-mDNS. Seed the connectionStore stub to 'no-paired' so the
+# Pairing tab is the natural entry, then deep-link to /pair (mDNS tab).
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=no-paired"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://pair"
+- waitForAnimationToEnd:
+    timeout: 800
+- takeScreenshot: ../captures/02-Pairing-mDNS/_latest

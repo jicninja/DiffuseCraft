@@ -1,0 +1,43 @@
+{
+  "name": "diffusecraft",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DiffuseCraft monorepo — tablet-first AI image editor (Expo client + server library + MCP catalog).",
+  "license": "MIT",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\" --ignore-path .gitignore",
+    "lint": "pnpm run lint:no-raw-hex",
+    "lint:no-raw-hex": "tsx tools/check-no-raw-hex.ts",
+    "typecheck": "tsc -b --pretty",
+    "dev:mobile": "pnpm --filter @diffusecraft/mobile start",
+    "snapshot:pen": "tsx tools/snapshot-pen.ts",
+    "verify:visual": "tsx apps/mobile/visual-verification/scripts/run.ts"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@types/node": "^20.14.0",
+    "@types/pixelmatch": "^5.2.6",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "~19.2.0",
+    "js-yaml": "^4.1.0",
+    "nx": "19.8.4",
+    "odiff-bin": "^3.1.1",
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "@shopify/react-native-skia": "2.6.2",
+      "react-native-reanimated": "4.2.1",
+      "react-native-gesture-handler": "2.30.0"
+    }
+  }
+}

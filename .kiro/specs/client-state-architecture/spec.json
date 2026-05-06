@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "slug": "client-state-architecture",
+  "title": "Client State Architecture (Zustand stores in @diffusecraft/core)",
+  "language": "en",
+  "status": "implementation",
+  "phases": {
+    "requirements": "approved",
+    "design": "approved",
+    "tasks": "approved",
+    "implementation": "completed"
+  },
+  "implemented_at": "2026-05-03",
+  "depends_on": ["mcp-tool-catalog"],
+  "blocks": [
+    "client-sdk",
+    "screens-implementation",
+    "generation-history",
+    "generation-workflow",
+    "regions",
+    "control-layers"
+  ],
+  "created_at": "2026-05-03"
+}

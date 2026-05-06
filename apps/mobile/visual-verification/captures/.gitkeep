@@ -1,0 +1,2 @@
+# captures/ holds per-run Maestro screenshots. Everything here except this
+# file is gitignored — captures are CI artifacts, never committed.

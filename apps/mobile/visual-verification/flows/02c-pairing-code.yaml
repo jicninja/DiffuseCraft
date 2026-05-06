@@ -1,0 +1,15 @@
+# Flow 02c-Pairing-Code. Lands on the 6-digit code pad. The flow does NOT
+# focus any digit so no cursor / focus ring leaks into the screenshot.
+appId: art.suquia.diffusecraft
+---
+- launchApp:
+    arguments:
+      url: "diffusecraft://__debug?cycle_to=no-paired"
+- waitForAnimationToEnd:
+    timeout: 1500
+- launchApp:
+    arguments:
+      url: "diffusecraft://pair/code"
+- waitForAnimationToEnd:
+    timeout: 800
+- takeScreenshot: ../captures/02c-Pairing-Code/_latest
