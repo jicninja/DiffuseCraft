@@ -47,7 +47,7 @@
   - _Boundary: libs/canvas-skia/src/io_
   - _Requirements: 1.1, 1.5, 1.6, 1.7, 2.1, 3.3, 4.5, 5.3, 5.5_
 
-- [ ] 2.2 (P) Web (browser) implementation of the picker/sharer adapter
+- [x] 2.2 (P) Web (browser) implementation of the picker/sharer adapter
   - Implement `pickImageFile()` and `pickProjectFile()` using a hidden `<input type="file">` element with the appropriate `accept` MIME list; resolve a `Uint8Array` from `File.arrayBuffer()`
   - Implement `pickProjectFile()` drag-drop overlay accepting `.dcft` (R5.4) and routing through the same return path as `<input>` selection
   - Implement `deliverFile()` via `URL.createObjectURL` + `<a download>`; feature-detect `showSaveFilePicker` and use it when present
