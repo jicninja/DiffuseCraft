@@ -86,9 +86,13 @@ function EditorScreenInner({ documentId, workspace, chat }: EditorScreenProps) {
         )}
       </View>
 
-      {/* Inpaint sub-mode chips above the prompt bar */}
+      {/* Inpaint sub-mode chips above the prompt bar.
+          Centered via stretched parent + `items-center` rather than the
+          `left-1/2 -translate-x-1/2` percentage-transform pattern, which
+          collapses the child off-screen on iOS New Architecture / Fabric
+          (same caveat that hid `<BottomPromptBar />` until it was fixed). */}
       {state.workspace === 'inpaint' && (
-        <View className="absolute bottom-28 left-1/2 -translate-x-1/2">
+        <View className="absolute bottom-28 left-0 right-0 items-center" pointerEvents="box-none">
           <InpaintModeChips mode={state.inpaintMode} onModeChange={state.setInpaintMode} />
         </View>
       )}

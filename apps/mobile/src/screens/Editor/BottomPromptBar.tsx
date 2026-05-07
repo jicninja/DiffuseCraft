@@ -113,13 +113,19 @@ export function BottomPromptBar({ workspace, onSubmit }: BottomPromptBarProps) {
   };
 
   return (
+    // Outer wrapper — stretches the full width at the bottom and centers
+    // an inner column capped at 720pt. The earlier `left-1/2
+    // -translate-x-1/2` pattern relied on RN's percentage-transform
+    // support, which fails on iOS New Architecture (Fabric) — the bar
+    // collapsed off-screen and never reached pixels. `left-0 right-0` +
+    // `items-center` is the bulletproof RN equivalent and matches the
+    // anchor-offset pattern the other floating chrome (TopBar /
+    // LeftToolRail / RightPanel) already uses.
     <View
-      // Outer wrapper — centers the bar + extras row at the bottom of the
-      // canvas. `left-1/2 -translate-x-1/2` keeps the 720pt-max group
-      // horizontally centered without committing to a fixed width.
-      className="absolute bottom-3 left-1/2 w-full max-w-[720px] -translate-x-1/2 px-3 gap-2"
+      className="absolute bottom-3 left-0 right-0 items-center px-3"
       pointerEvents="box-none"
     >
+     <View className="w-full max-w-[720px] gap-2">
       {/* ─── Row 1: the prompt bar itself (64pt) ─────────────────────── */}
       <View
         className="h-16 flex-row items-center gap-2 rounded-lg border border-border-subtle bg-elevated px-4 py-3 shadow-sheet"
@@ -235,6 +241,7 @@ export function BottomPromptBar({ workspace, onSubmit }: BottomPromptBarProps) {
           );
         })}
       </ScrollView>
+     </View>
     </View>
   );
 }

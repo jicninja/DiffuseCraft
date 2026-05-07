@@ -59,12 +59,17 @@ function resolveActiveLayerKind(
 /**
  * Map the store's `SelectionSnapshot` to a canvas-core `Selection`.
  *
- * The store snapshot is a subset of the full `Selection` union (it omits
- * `lasso` and uses `mask_uri` instead of `layer_id`). This mapper
- * produces a value compatible with `drawSelectionOverlay` from canvas-skia.
+ * The store mirrors the wire-format snapshot (`mask_uri` instead of
+ * `layer_id`). Rect and lasso pass through as-is; mask is mapped onto a
+ * `layer_id` placeholder since the overlay is a no-op for masks anyway
+ * (those use the active-layer border, not marching ants).
  */
 function toCanvasSelection(
-  storeSelection: { kind: 'none' } | { kind: 'rect'; rect: { x: number; y: number; w: number; h: number } } | { kind: 'mask'; mask_uri: string },
+  storeSelection:
+    | { kind: 'none' }
+    | { kind: 'rect'; rect: { x: number; y: number; w: number; h: number } }
+    | { kind: 'lasso'; points: ReadonlyArray<{ x: number; y: number }> }
+    | { kind: 'mask'; mask_uri: string },
 ): Selection {
   if (storeSelection.kind === 'rect') {
     return {
@@ -72,13 +77,13 @@ function toCanvasSelection(
       rect: storeSelection.rect,
     };
   }
-  // 'mask' and 'none' both pass through as-is for overlay purposes.
-  // drawSelectionOverlay is a no-op for 'none' and 'mask' kinds.
+  if (storeSelection.kind === 'lasso') {
+    return {
+      kind: 'lasso',
+      points: storeSelection.points,
+    };
+  }
   if (storeSelection.kind === 'mask') {
-    // The overlay function expects a `layer_id` for mask selections.
-    // The store carries `mask_uri` — pass a placeholder; the overlay
-    // function skips mask-kind selections anyway (they're visualized
-    // via the active-layer border, not marching ants).
     return { kind: 'mask', layer_id: storeSelection.mask_uri } as Selection;
   }
   return { kind: 'none' };

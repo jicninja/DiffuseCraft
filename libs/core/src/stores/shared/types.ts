@@ -90,6 +90,7 @@ export interface LayerSnapshot {
 export type SelectionSnapshot =
   | { kind: 'none' }
   | { kind: 'rect'; rect: { x: number; y: number; w: number; h: number } }
+  | { kind: 'lasso'; points: ReadonlyArray<{ x: number; y: number }> }
   | { kind: 'mask'; mask_uri: string };
 
 export interface ModelDownloadProgressPayload {

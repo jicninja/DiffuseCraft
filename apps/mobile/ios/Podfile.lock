@@ -201,9 +201,11 @@ PODS:
     - Yoga
   - ExpoAsset (55.0.16):
     - ExpoModulesCore
+  - ExpoDocumentPicker (55.0.13):
+    - ExpoModulesCore
   - ExpoDomWebView (55.0.5):
     - ExpoModulesCore
-  - ExpoFileSystem (55.0.17):
+  - ExpoFileSystem (55.0.19):
     - ExpoModulesCore
   - ExpoFont (55.0.6):
     - ExpoModulesCore
@@ -216,11 +218,16 @@ PODS:
     - SDWebImageAVIFCoder (~> 0.11.0)
     - SDWebImageSVGCoder (~> 1.7.0)
     - SDWebImageWebPCoder (~> 0.14.6)
+  - ExpoImagePicker (55.0.20):
+    - ExpoModulesCore
   - ExpoKeepAwake (55.0.7):
     - ExpoModulesCore
   - ExpoLinking (55.0.14):
     - ExpoModulesCore
   - ExpoLogBox (55.0.11):
+    - React-Core
+  - ExpoMediaLibrary (55.0.16):
+    - ExpoModulesCore
     - React-Core
   - ExpoModulesCore (55.0.24):
     - ExpoModulesJSI
@@ -255,6 +262,8 @@ PODS:
   - ExpoRouter (55.0.13):
     - ExpoModulesCore
     - RNScreens
+  - ExpoSharing (55.0.18):
+    - ExpoModulesCore
   - ExpoSymbols (55.0.7):
     - ExpoModulesCore
   - EXUpdatesInterface (55.1.6):
@@ -2434,17 +2443,21 @@ DEPENDENCIES:
   - expo-dev-menu (from `../../../node_modules/expo-dev-menu`)
   - expo-dev-menu-interface (from `../../../node_modules/expo-dev-menu-interface/ios`)
   - ExpoAsset (from `../../../node_modules/expo-asset/ios`)
+  - ExpoDocumentPicker (from `../../../node_modules/expo-document-picker/ios`)
   - "ExpoDomWebView (from `../../../node_modules/@expo/dom-webview/ios`)"
   - ExpoFileSystem (from `../../../node_modules/expo-file-system/ios`)
   - ExpoFont (from `../../../node_modules/expo-font/ios`)
   - ExpoGlassEffect (from `../../../node_modules/expo-glass-effect/ios`)
   - ExpoImage (from `../../../node_modules/expo-image/ios`)
+  - ExpoImagePicker (from `../../../node_modules/expo-image-picker/ios`)
   - ExpoKeepAwake (from `../../../node_modules/expo-keep-awake/ios`)
   - ExpoLinking (from `../../../node_modules/expo-linking/ios`)
   - "ExpoLogBox (from `../../../node_modules/@expo/log-box`)"
+  - ExpoMediaLibrary (from `../../../node_modules/expo-media-library/ios`)
   - ExpoModulesCore (from `../../../node_modules/expo-modules-core`)
   - ExpoModulesJSI (from `../../../node_modules/expo-modules-core`)
   - ExpoRouter (from `../../../node_modules/expo-router/ios`)
+  - ExpoSharing (from `../../../node_modules/expo-sharing/ios`)
   - ExpoSymbols (from `../../../node_modules/expo-symbols/ios`)
   - EXUpdatesInterface (from `../../../node_modules/expo-updates-interface/ios`)
   - FBLazyVector (from `../node_modules/react-native/Libraries/FBLazyVector`)
@@ -2560,6 +2573,8 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/expo-dev-menu-interface/ios"
   ExpoAsset:
     :path: "../../../node_modules/expo-asset/ios"
+  ExpoDocumentPicker:
+    :path: "../../../node_modules/expo-document-picker/ios"
   ExpoDomWebView:
     :path: "../../../node_modules/@expo/dom-webview/ios"
   ExpoFileSystem:
@@ -2570,18 +2585,24 @@ EXTERNAL SOURCES:
     :path: "../../../node_modules/expo-glass-effect/ios"
   ExpoImage:
     :path: "../../../node_modules/expo-image/ios"
+  ExpoImagePicker:
+    :path: "../../../node_modules/expo-image-picker/ios"
   ExpoKeepAwake:
     :path: "../../../node_modules/expo-keep-awake/ios"
   ExpoLinking:
     :path: "../../../node_modules/expo-linking/ios"
   ExpoLogBox:
     :path: "../../../node_modules/@expo/log-box"
+  ExpoMediaLibrary:
+    :path: "../../../node_modules/expo-media-library/ios"
   ExpoModulesCore:
     :path: "../../../node_modules/expo-modules-core"
   ExpoModulesJSI:
     :path: "../../../node_modules/expo-modules-core"
   ExpoRouter:
     :path: "../../../node_modules/expo-router/ios"
+  ExpoSharing:
+    :path: "../../../node_modules/expo-sharing/ios"
   ExpoSymbols:
     :path: "../../../node_modules/expo-symbols/ios"
   EXUpdatesInterface:
@@ -2759,17 +2780,21 @@ SPEC CHECKSUMS:
   expo-dev-menu: 35bbb17e6d2866527948650d5389fe117321fbf9
   expo-dev-menu-interface: 833795f4c98a674d36cbc12b11b21756c38e01e8
   ExpoAsset: f56ed740b6a127da2bfd90832cf688ae309d4410
+  ExpoDocumentPicker: be59b82799ae30811e3f37a7521d6622baa63a19
   ExpoDomWebView: 2b2fbd9a07de8790569257cbf9dfdaa31cf95c70
-  ExpoFileSystem: a0e4a5a09c9c4f84338289b273a172609452dec9
+  ExpoFileSystem: 0b73b097e67c83622640168f620defc65a1a6f70
   ExpoFont: cdd7a1d574a376fa003c713eff49e0a4df8672c7
   ExpoGlassEffect: 72bcb9dc634262c59897ff7c53c16e2ff03990d0
   ExpoImage: bd9e9c5bc4eff7a6883339be305f8b0bb5a0cf1c
+  ExpoImagePicker: 7c75b2f076d6f45598fcbd035908aebc4c2eb257
   ExpoKeepAwake: 861c66deb0f9f28f87882610195f26c4b88fba6f
   ExpoLinking: f9e01f5182f2653ea9d90f18fb47f1913e2f99ef
   ExpoLogBox: 617da77cbc083627692b2ea050a3666808aef2cd
+  ExpoMediaLibrary: ddb07a0f7e0e8b36adc3130fa2fe5757643273bb
   ExpoModulesCore: 088468ce2605ce08b704105945c2232e73a7b9ee
   ExpoModulesJSI: 9b60671a31c30bc8e24b25632e7cb475a84b9016
   ExpoRouter: e2c56f80102b153c5f8c887b38094ef936c266a2
+  ExpoSharing: 5acc9d78894386d31b862b12ed1cebe7dce74e68
   ExpoSymbols: 8b63e859ba013df1f2fc666f535fddb3d5270569
   EXUpdatesInterface: 4c11f4d1594526258f14d09817dc407acbf24e3b
   FBLazyVector: 427fa1856a481856091061293ce865a75aa4f20f
