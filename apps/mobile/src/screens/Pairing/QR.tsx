@@ -19,10 +19,11 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ChevronLeft } from 'lucide-react-native';
 import { useCallback, useRef, useState } from 'react';
 import { Linking, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useConnectionStore } from '@diffusecraft/core';
 import { PairingClient } from '@diffusecraft/diffusion-client';
-import { Button, toast } from '@diffusecraft/ui';
+import { Button, toast, tokens } from '@diffusecraft/ui';
 
 import { completePairing } from '../../sdk/pairing-flow';
 import { PAIRING_QR_STRINGS as S } from '../_strings/PairingQR';
@@ -59,6 +60,7 @@ function CornerBracket({ variant, accent }: { variant: CornerVariant; accent: bo
 
 export function PairingQRScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const pairBackend = useConnectionStore((s) => s.pairBackend);
   const setCurrentBackend = useConnectionStore((s) => s.setCurrentBackend);
@@ -103,18 +105,20 @@ export function PairingQRScreen() {
   return (
     <View className="flex-1 bg-canvas">
       {/* Top app bar */}
-      <View className="h-14 flex-row items-center gap-3 px-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          onPress={() => router.back()}
-          accessibilityLabel={S.backA11yLabel}
-        >
-          <ChevronLeft size={20} className="text-text-primary" />
-        </Button>
-        <Text className="text-title text-text-primary" numberOfLines={1}>
-          {S.title}
-        </Text>
+      <View style={{ paddingTop: insets.top }}>
+        <View className="h-14 flex-row items-center gap-3 px-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onPress={() => router.back()}
+            accessibilityLabel={S.backA11yLabel}
+          >
+            <ChevronLeft size={20} color={tokens.colors.text.primary} />
+          </Button>
+          <Text className="text-title text-text-primary" numberOfLines={1}>
+            {S.title}
+          </Text>
+        </View>
       </View>
 
       {/* Viewfinder body */}

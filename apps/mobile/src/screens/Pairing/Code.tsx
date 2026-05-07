@@ -12,13 +12,14 @@ import { useRouter } from 'expo-router';
 import { ChevronLeft, Delete } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useConnectionStore } from '@diffusecraft/core';
 import {
   PairingClient,
   PairingRejectedError,
 } from '@diffusecraft/diffusion-client';
-import { Button, Card, toast } from '@diffusecraft/ui';
+import { Button, Card, toast, tokens } from '@diffusecraft/ui';
 
 import { completePairing, getDeviceName } from '../../sdk/pairing-flow';
 import { useMdnsScan } from '../../sdk/zeroconf-mdns';
@@ -47,6 +48,7 @@ function DigitBox({ char, index }: { char: string; index: number }) {
 
 export function PairingCodeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const pairBackend = useConnectionStore((s) => s.pairBackend);
   const setCurrentBackend = useConnectionStore((s) => s.setCurrentBackend);
   const discoveredBackends = useConnectionStore((s) => s.discoveredBackends);
@@ -146,15 +148,17 @@ export function PairingCodeScreen() {
   return (
     <View className="flex-1 bg-canvas">
       {/* Top bar */}
-      <View className="h-14 flex-row items-center px-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          onPress={() => router.back()}
-          accessibilityLabel={S.backA11yLabel}
-        >
-          <ChevronLeft size={20} className="text-text-primary" />
-        </Button>
+      <View style={{ paddingTop: insets.top }}>
+        <View className="h-14 flex-row items-center px-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onPress={() => router.back()}
+            accessibilityLabel={S.backA11yLabel}
+          >
+            <ChevronLeft size={20} color={tokens.colors.text.primary} />
+          </Button>
+        </View>
       </View>
 
       {/* Body: title, digit row, keypad */}

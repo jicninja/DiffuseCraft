@@ -16,6 +16,7 @@ import { useRouter } from 'expo-router';
 import { ChevronDown, ChevronLeft, ChevronUp, Eye, EyeOff } from 'lucide-react-native';
 import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useConnectionStore } from '@diffusecraft/core';
 import { PairingClient } from '@diffusecraft/diffusion-client';
@@ -28,6 +29,7 @@ import {
   Input,
   Label,
   toast,
+  tokens,
 } from '@diffusecraft/ui';
 
 import { completePairing } from '../../sdk/pairing-flow';
@@ -35,6 +37,7 @@ import { PAIRING_MANUAL_STRINGS as S } from '../_strings/PairingManual';
 
 export function PairingManualScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const pairBackend = useConnectionStore((s) => s.pairBackend);
   const setCurrentBackend = useConnectionStore((s) => s.setCurrentBackend);
 
@@ -93,18 +96,20 @@ export function PairingManualScreen() {
   return (
     <View className="flex-1 bg-canvas">
       {/* Top app bar: 56pt (h-14). Back chevron + title. */}
-      <View className="h-14 flex-row items-center gap-3 px-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          onPress={() => router.back()}
-          accessibilityLabel="Back"
-        >
-          <ChevronLeft size={20} className="text-text-primary" />
-        </Button>
-        <Text className="text-title text-text-primary" numberOfLines={1}>
-          {S.title}
-        </Text>
+      <View style={{ paddingTop: insets.top }}>
+        <View className="h-14 flex-row items-center gap-3 px-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onPress={() => router.back()}
+            accessibilityLabel="Back"
+          >
+            <ChevronLeft size={20} color={tokens.colors.text.primary} />
+          </Button>
+          <Text className="text-title text-text-primary" numberOfLines={1}>
+            {S.title}
+          </Text>
+        </View>
       </View>
 
       <ScrollView
@@ -220,7 +225,7 @@ export function PairingManualScreen() {
             onPress={() => router.push('/pair')}
             accessibilityLabel={S.footerBackToDiscovery}
           >
-            <ChevronLeft size={16} className="text-text-secondary" />
+            <ChevronLeft size={16} color={tokens.colors.text.secondary} />
             <Text className="text-text-secondary text-body">
               {S.footerBackToDiscovery}
             </Text>
