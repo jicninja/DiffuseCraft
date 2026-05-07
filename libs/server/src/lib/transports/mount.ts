@@ -18,6 +18,7 @@ import type { ConnectionTracker } from './connection-tracker.js';
 import type { UndoRedoManagerLike } from '../../types/handler-context.js';
 import type { CatalogManifest } from '../catalog/types.js';
 import type { InMemorySamplingRegistry } from '../sampling/registry.js';
+import type { AssetStore } from '../assets/store.js';
 import { InMemoryTransport } from './in-memory.js';
 import { StdioTransport } from './stdio.js';
 import { HttpTransport } from './http.js';
@@ -64,6 +65,15 @@ export interface MountArgs {
   catalog: CatalogManifest;
   /** Sampling registry — sampling-capable peers register here when they connect. */
   samplingRegistry?: InMemorySamplingRegistry;
+  /**
+   * Asset store backing the layer-raster blobs. Required by the HTTP
+   * transport's `/documents/import` and `/documents/:id/export` routes
+   * (image-io task 5) — both wrap `DcftMaterializer` / `DcftSerializer`,
+   * which need read+write access to the blob store. Optional so existing
+   * tests that mount transports without a full bootstrap keep working;
+   * when absent, the HTTP transport responds 503 to the two .dcft routes.
+   */
+  assets?: AssetStore;
   /** Server identity surfaced in MCP `initialize` responses. */
   serverInfo: { name: string; version: string };
 }
@@ -81,6 +91,7 @@ export async function mountTransports(args: MountArgs): Promise<MountedTransport
     undoRedo,
     catalog,
     samplingRegistry,
+    assets,
     serverInfo,
   } = args;
 
@@ -126,6 +137,7 @@ export async function mountTransports(args: MountArgs): Promise<MountedTransport
       ...(connectionTracker ? { connectionTracker } : {}),
       ...(undoRedo ? { undoRedo } : {}),
       ...(samplingRegistry ? { samplingRegistry } : {}),
+      ...(assets ? { assets } : {}),
     });
     const r = await http.start();
     httpUrl = r.url;

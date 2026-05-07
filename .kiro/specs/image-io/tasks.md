@@ -92,7 +92,7 @@
   - _Boundary: libs/server/src/lib/dcft_
   - _Requirements: 2.3, 2.4, 2.6, 3.10, 8.5_
 
-- [ ] 5. HTTP transport: `.dcft` import / export endpoints
+- [x] 5. HTTP transport: `.dcft` import / export endpoints
   - Register `@fastify/multipart` once with `limits.fileSize: DCFT_MAX_BYTES` so Fastify rejects oversize uploads before reaching the materializer
   - Add `POST /documents/import` behind the existing `Authorization: Bearer dcft_*` middleware; parse a single `archive` multipart field, call `DcftMaterializer.materialize`, map `Result<...>` to `201 Created { documentId }` on success and to the appropriate `400 / 401 / 413 / 415 / 422` on the listed error discriminants
   - Add `GET /documents/:id/export` behind the same middleware; call `DcftSerializer.serialize`, stream the response body with `Content-Type: application/x-dcft` and `Content-Disposition: attachment; filename="<title>.dcft"`; map `404` for missing documents and `409` for zero-layer documents

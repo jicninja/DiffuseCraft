@@ -837,6 +837,7 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
       // `enhance_prompt` handler reads this registry via
       // {@link resolveSamplingTarget}.
       samplingRegistry,
+      assets,
       catalog: this.catalog,
       serverInfo: { name: this.config.host_name, version: SUPPORTED_CATALOG_VERSION },
     });
