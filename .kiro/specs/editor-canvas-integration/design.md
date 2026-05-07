@@ -563,9 +563,14 @@ export function Layers() {
     // Get current document from store, apply addLayer, update store
   };
 
-  // FR-13: swipe to delete
+  // FR-13 / FR-13a: swipe reveals a Delete button; tap commits the
+  // deletion. Swipe alone never mutates. The bottom-most row (FR-13b) is
+  // rendered without a Swipeable wrapper, and removeLayerById additionally
+  // rejects position-0 removals (defense-in-depth — see FR-13b rationale,
+  // grounded in P28 raster-only).
   const handleDeleteLayer = (layerId: string) => {
-    // Apply removeLayer from canvas-core, update store
+    // Tapped from inside renderRightActions's onPress — calls
+    // removeLayer from canvas-core after closing the swipeable.
   };
 
   // FR-14: drag to reorder

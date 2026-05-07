@@ -53,11 +53,10 @@ import {
 import {
   commitActiveStrokeWorklet,
   createStampRenderer,
-  type LayerSurfaceRegistry,
   type SkiaRenderAdapter,
   type StampRenderer,
 } from '@diffusecraft/canvas-skia';
-import { BlendMode, type SkImage } from '@shopify/react-native-skia';
+import { BlendMode, type SkImage, type SkSurface } from '@shopify/react-native-skia';
 import {
   makeMutable,
   runOnJS,
@@ -121,18 +120,27 @@ interface StrokeRuntimeState {
   expander: IncrementalStampExpander | null;
   renderer: StampRenderer | null;
   /**
-   * Layer surface registry. Stored at `_workletBegin` time so subsequent
-   * worklets (`pushPoint`, `commitStroke`, `cancelStroke`) do NOT need to
-   * read from a JS-thread ref — capturing the adapter ref inside a worklet
-   * closure freezes it under Reanimated's serialization model and breaks
-   * subsequent JS-thread mutations.
+   * Persistent layer surface (the raster source of truth for this layer's
+   * pixels). Captured at `beginStroke` time on the JS thread and passed
+   * through `_workletBegin` so the commit worklet can flatten the active
+   * stroke onto it without a JS-thread Map lookup. Looking up a record by
+   * `layerId` from inside a worklet does NOT work reliably: Reanimated
+   * snapshots the registry's `Map<LayerId, LayerRecord>` once when it's
+   * first serialized across the worklet boundary, so JS-thread `set()`
+   * calls (e.g., when a new layer is created mid-session) are invisible
+   * to subsequent worklet invocations.
    */
-  registry: LayerSurfaceRegistry | null;
+  layerSurface: SkSurface | null;
   /**
-   * Active layer id. Stored as the canvas-core branded `LayerId` so it
-   * threads through `commitActiveStrokeWorklet` without an inline cast at
-   * each commit. The brand is structural (a string at runtime) so the
-   * worklet sees a primitive on the UI thread.
+   * Reactive image handle the visible `<Image>` subscribes to. Same
+   * cross-boundary rationale as `layerSurface` — captured on the JS
+   * thread so the worklet writes through it directly.
+   */
+  layerImage: SharedValue<SkImage | null> | null;
+  /**
+   * Active layer id. Kept for diagnostics / future hooks; the commit path
+   * itself no longer needs it because `layerSurface` and `layerImage`
+   * carry the per-layer state directly.
    */
   layerId: LayerId | null;
   width: number;
@@ -154,7 +162,8 @@ function createInitialStrokeState(): StrokeRuntimeState {
   return {
     expander: null,
     renderer: null,
-    registry: null,
+    layerSurface: null,
+    layerImage: null,
     layerId: null,
     width: 0,
     height: 0,
@@ -214,13 +223,17 @@ export function useBrushPipeline(
    * UI-thread tail of `beginStroke`. Runs after the JS-thread snapshot has
    * been resolved and the layer surface allocated.
    *
-   * Note we receive plain primitives + the registry handle so the worklet
-   * does not capture any non-shareable JS-thread reference.
+   * The worklet receives the persistent `layerSurface` and reactive
+   * `layerImage` SharedValue directly (resolved on the JS thread at
+   * `beginStroke` time). It does NOT receive the registry — see the
+   * commit-worklet file-level comment for why looking up by `layerId`
+   * from inside a worklet is unreliable.
    */
   const _workletBegin = (
     expander: IncrementalStampExpander,
     renderer: StampRenderer,
-    registry: LayerSurfaceRegistry,
+    layerSurface: SkSurface,
+    layerImage: SharedValue<SkImage | null>,
     layerId: LayerId,
     width: number,
     height: number,
@@ -254,7 +267,8 @@ export function useBrushPipeline(
       strokeState.value = {
         expander,
         renderer,
-        registry,
+        layerSurface,
+        layerImage,
         layerId,
         width,
         height,
@@ -323,11 +337,13 @@ export function useBrushPipeline(
   };
 
   /**
-   * Worklet body for `commitStroke`. Reads the registry from
-   * `strokeState.value` (stored at `_workletBegin`) — never from a JS-thread
-   * ref, because capturing such a ref in a worklet closure freezes it under
-   * Reanimated's serialization model and breaks subsequent JS-thread
-   * mutations of that ref.
+   * Worklet body for `commitStroke`. Reads the per-layer `layerSurface`
+   * and `layerImage` SharedValue from `strokeState.value` (both stored at
+   * `_workletBegin`). We deliberately do NOT do a JS-thread lookup by
+   * `layerId` from inside the worklet — Reanimated's worklet-args
+   * serialization snapshots JS-thread Maps once, so a `records.get(id)`
+   * call from here returns a stale view that misses any layer added
+   * after the registry first crossed the boundary.
    */
   const _workletCommit = (): void => {
     'worklet';
@@ -336,10 +352,14 @@ export function useBrushPipeline(
 
     try {
       const strokeSurface = s.renderer.getSurface();
-      if (strokeSurface !== null && s.registry !== null && s.layerId !== null) {
+      if (
+        strokeSurface !== null
+        && s.layerSurface !== null
+        && s.layerImage !== null
+      ) {
         commitActiveStrokeWorklet({
-          registry: s.registry,
-          layerId: s.layerId,
+          layerSurface: s.layerSurface,
+          layerImage: s.layerImage,
           strokeSurface,
           blendMode: s.blendMode,
           bbox: s.bbox,
@@ -432,12 +452,12 @@ export function useBrushPipeline(
         // branded `LayerId` for type-level safety. The cast is structural —
         // at runtime the brand is a TypeScript-only marker.
         const layerId = config.layerId as LayerId;
-        const surface = a.layerSurfaces.getOrCreateSurface(
+        const layerSurface = a.layerSurfaces.getOrCreateSurface(
           layerId,
           width,
           height,
         );
-        if (surface === null) {
+        if (layerSurface === null) {
           jsWarn('beginStroke: layer surface allocation failed', {
             layerId: config.layerId,
             width,
@@ -445,6 +465,11 @@ export function useBrushPipeline(
           });
           return;
         }
+        // Capture the reactive image handle on the JS thread. Passing it
+        // alongside `layerSurface` to `_workletBegin` lets the commit
+        // worklet write through `.value` directly without a stale-Map
+        // lookup against the registry from inside the worklet runtime.
+        const layerImage = a.layerSurfaces.imageFor(layerId);
 
         const expander = createIncrementalStampExpander({
           preset: config.preset,
@@ -454,7 +479,8 @@ export function useBrushPipeline(
         runOnUI(_workletBegin)(
           expander,
           renderer,
-          a.layerSurfaces,
+          layerSurface,
+          layerImage,
           layerId,
           width,
           height,
@@ -471,11 +497,12 @@ export function useBrushPipeline(
       },
       commitStroke(): void {
         'worklet';
-        // The registry was stored in strokeState at `_workletBegin` time —
-        // we deliberately do NOT capture any JS-thread ref in this worklet
-        // closure (capturing `adapterRef.current` here would freeze the ref
-        // under Reanimated's serialization model and break subsequent JS
-        // re-renders that mutate `adapterRef.current = adapter`).
+        // The layer surface + reactive image SharedValue were stored in
+        // strokeState at `_workletBegin` time — we deliberately do NOT
+        // capture any JS-thread ref in this worklet closure (capturing
+        // `adapterRef.current` here would freeze the ref under
+        // Reanimated's serialization model and break subsequent JS-thread
+        // mutations of that ref).
         _workletCommit();
       },
       cancelStroke(): void {

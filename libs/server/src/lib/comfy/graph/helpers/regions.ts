@@ -20,7 +20,17 @@ export function attachRegions(
   startId: number,
   _ctx: GraphContext,
 ): AttachRegionsResult {
-  // TODO(regions): port krita-ai-diffusion `ai_diffusion/region.py`.
-  void region_ids;
-  return { graph, nextId: startId };
+  if (region_ids.length === 0) {
+    return { graph, nextId: startId };
+  }
+  // Non-empty: the krita-ai-diffusion `ai_diffusion/region.py` port
+  // (~550 LOC) is owned by the `regions` spec. Refuse loudly so callers
+  // observe a clear error instead of a silently-dropped argument.
+  throw Object.assign(new Error('REGIONS_NOT_IMPLEMENTED'), {
+    code: 'REGIONS_NOT_IMPLEMENTED',
+    cause: {
+      hint: 'region_ids is currently unsupported (regions spec pending). Pass [] or omit the field.',
+      requested_count: region_ids.length,
+    },
+  });
 }

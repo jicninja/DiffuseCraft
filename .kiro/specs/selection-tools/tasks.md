@@ -24,7 +24,7 @@
 - [x] **B.3** `select_all` handler. **(S)** — `libs/server/src/lib/handlers/select-all.ts`.
 - [x] **B.4** `refine_selection` handler. **(S)** — `libs/server/src/lib/handlers/refine-selection.ts`.
 - [x] **B.5** Catalog updates: add 3 tools (invert, select_all, refine). **(S)** — manifest registers all 5 (incl. AI tier stubs).
-- [ ] **B.6** Magic wand server logic for `set_selection({ kind: "mask", source: "magic_wand", layer_id, tap_point, tolerance, contiguous })`. **(M)** — DEFERRED: handler returns `MAGIC_WAND_NOT_WIRED` until layer-blob fetch is plumbed; canvas-core `magicWandSelect` is ready for client-side use.
+- [x] **B.6** Magic wand server logic for `set_selection({ kind: "magic_wand", layer_id, tap_point, tolerance, contiguous })`. **(M)** — `createSetSelectionHandler({db, store, assets})` now intercepts `magic_wand` shapes, reads the layer's raw-RGBA blob via `MaskAssetStore`, runs canvas-core `magicWandSelect`, composes against the prior selection per `op` at the mask level, and persists the result as a fresh mask blob (the precision-preserving path; no lossy `reduceShape` corner approximation). `sample_composite: true` and missing `layer_id` still surface structured errors (`MAGIC_WAND_COMPOSITE_NOT_WIRED` / `MAGIC_WAND_LAYER_REQUIRED`) until the composite raster cache lands with the renderer pipeline. Hosts that don't wire `assets` keep getting `MAGIC_WAND_NOT_WIRED`, so the client-side fallback (`magicWandSelect` + `kind: "mask"`) remains valid.
 - [x] **B.7** Tests: each handler reversibility. **(M)** — `libs/server/src/__tests__/selection.ts` (25 cases).
 
 ## Phase C — Server: Tier 2 (MobileSAM)

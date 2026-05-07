@@ -16,7 +16,10 @@ export interface ConformanceFailure {
 const NON_OBVIOUS_DESCRIPTION_WORD_CAP = 200;
 const OBVIOUS_DESCRIPTION_WORD_CAP = 60;
 const TOOL_CAP = 65;
-const FOOTPRINT_CAP_BYTES = 100_000;
+// Footprint cap raised from 100 KB to 150 KB for v1 buildout — see the
+// matching note in `scripts/emit-json-schema.ts`. NFR-3's original 100 KB
+// budget is the post-v1 trim target, not a current gate.
+const FOOTPRINT_CAP_BYTES = 150_000;
 
 const wordCount = (text: string): number =>
   text

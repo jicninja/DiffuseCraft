@@ -105,10 +105,14 @@ import type {
 
 /**
  * Minimal structural shape the in-memory transport requires from its
- * `server` argument. Mirrors `@diffusecraft/server`'s `McpInterface` and
- * `EventsInterface` (`libs/server/src/public-api.ts`) but is declared
- * inline so this file does not take a runtime or type dependency on the
- * server package.
+ * `server` argument. Mirrors `@diffusecraft/server`'s `McpInterface`,
+ * `EventsInterface`, and `CapabilitiesInterface`
+ * (`libs/server/src/public-api.ts`) but is declared inline so this file
+ * does not take a runtime or type dependency on the server package.
+ *
+ * `capabilities` is optional so older server builds that predate FR-9's
+ * snapshot surface still construct successfully — `connect()` then falls
+ * back to the legacy minimum-shape handshake.
  */
 interface ServerShape {
   readonly mcp: {
@@ -120,6 +124,9 @@ interface ServerShape {
       name: string,
       handler: (payload: unknown) => void,
     ) => Unsubscribe;
+  };
+  readonly capabilities?: {
+    snapshot: () => HandshakeResult;
   };
 }
 
@@ -236,17 +243,21 @@ export class InMemoryTransport implements Transport {
   }
 
   /**
-   * No-op handshake — the in-memory transport is always connected once
-   * constructed. Returns a placeholder {@link HandshakeResult} so the
-   * caller has a stable shape to store in `capabilities.server`. Phase G
-   * replaces this with a real query once `DiffuseCraftServer` exposes
-   * its negotiated capabilities publicly.
+   * Handshake — the in-memory transport is always connected once
+   * constructed. Reads the server's live {@link CapabilitiesInterface}
+   * snapshot when available (FR-9 / design.md §4) so the result reflects
+   * real `comfyui_status` / `sampling_supported` / `catalog_version_range`
+   * values instead of a placeholder. Falls back to a conservative shape
+   * for older server builds that predate the snapshot surface.
    */
   async connect(): Promise<HandshakeResult> {
     // Resolve the narrow eagerly so connection-shape errors surface here
     // (matching how a real handshake would fail at connect time) instead
     // of on the first send/readResource/subscribe call.
-    this.getServer();
+    const server = this.getServer();
+    if (server.capabilities && typeof server.capabilities.snapshot === "function") {
+      return server.capabilities.snapshot();
+    }
     return {
       serverCapabilities: {
         catalog_version_range: ["0", "0"],

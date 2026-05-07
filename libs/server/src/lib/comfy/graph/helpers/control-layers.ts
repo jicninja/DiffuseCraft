@@ -32,7 +32,19 @@ export function attachControlLayers(
   startId: number,
   _ctx: GraphContext,
 ): AttachControlLayersResult {
-  // TODO(control-layers): port krita-ai-diffusion `ai_diffusion/control.py`.
-  void control_layer_ids;
-  return { graph, nextId: startId, positive: null };
+  // Empty list is a real no-op (the verb builder's default path).
+  if (control_layer_ids.length === 0) {
+    return { graph, nextId: startId, positive: null };
+  }
+  // Non-empty: the krita-ai-diffusion `ai_diffusion/control.py` port
+  // (~540 LOC, 17 control-layer types) is owned by the `control-layers`
+  // spec. Until that ships we refuse the request loudly so callers see a
+  // clear error instead of a silently-dropped argument.
+  throw Object.assign(new Error('CONTROL_LAYERS_NOT_IMPLEMENTED'), {
+    code: 'CONTROL_LAYERS_NOT_IMPLEMENTED',
+    cause: {
+      hint: 'control_layer_ids is currently unsupported (control-layers spec pending). Pass [] or omit the field.',
+      requested_count: control_layer_ids.length,
+    },
+  });
 }

@@ -30,6 +30,7 @@ import type { Document, LayerKind, Selection } from '@diffusecraft/canvas-core';
 import { CanvasView, type SkiaRenderAdapter } from '@diffusecraft/canvas-skia';
 import { useEditorStore } from '@diffusecraft/core';
 
+import { useEditorDocument } from './EditorDocumentContext';
 import { useViewport } from './useViewport';
 import { useGestureCompositor } from './useGestureCompositor';
 import { useBrushPipeline } from './useBrushPipeline';
@@ -97,6 +98,13 @@ export function CanvasArea({ document }: CanvasAreaProps) {
 
   const brushPipeline = useBrushPipeline(adapter);
   const gesture = useGestureCompositor(viewport, brushPipeline);
+
+  // Per-layer opacity getter. The provider lazily allocates a
+  // `SharedValue<number>` per layer and writes to it synchronously when
+  // `patchLayer({ opacity })` runs — RN-Skia subscribes via JSI so
+  // opacity slider drags repaint the canvas on the next vsync, with no
+  // React re-render in the visual hot path.
+  const { liveOpacityFor } = useEditorDocument();
 
   // --- Overlay data from editorStore (FR-27, FR-30, FR-46) ---
   const activeLayerId = useEditorStore((s) => s.activeLayerId);
@@ -174,6 +182,12 @@ export function CanvasArea({ document }: CanvasAreaProps) {
             // is preserved by the JSI bridge.
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             activeStrokeImage={brushPipeline.activeStrokeImage as any}
+            // Same package-duplication caveat as above: the SharedValue
+            // returned by the provider and the one CanvasView's prop type
+            // expects are nominally distinct at the type level but
+            // identical at runtime.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            getLayerOpacity={liveOpacityFor as any}
           />
         </View>
       </GestureDetector>

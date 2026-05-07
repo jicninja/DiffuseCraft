@@ -6,6 +6,8 @@
  * without pulling in the full implementation tree.
  */
 
+import type { ServerCapabilities } from '@diffusecraft/mcp-tools';
+
 import type {
   ServerStatus,
   ServerLifecycleEvent,
@@ -17,6 +19,35 @@ import type {
   OpenWindowOptions,
   OpenWindowResult,
 } from './lib/pairing/manager.js';
+
+/**
+ * Live snapshot of the server's negotiated capabilities, returned by
+ * {@link CapabilitiesInterface.snapshot}. Mirrors the shape that
+ * `client-sdk`'s `Transport.connect()` returns so the in-memory transport
+ * can forward it verbatim (`client-sdk` design.md §3 — `capabilities.server`).
+ */
+export interface ServerHandshakeSnapshot {
+  /** Live server capabilities read at the moment of the call. */
+  serverCapabilities: ServerCapabilities;
+  /** MCP protocol version the server speaks. */
+  protocolVersion: string;
+  /** Configured human-readable server name (`config.host_name`). */
+  serverName: string;
+}
+
+/**
+ * Public capabilities surface for in-process callers (the SDK's in-memory
+ * transport, MeshCraft, integration tests). The server publishes a live
+ * snapshot — `comfyui_status` reflects the current health-monitor state,
+ * `sampling_supported` reflects whether a sampling-capable agent is
+ * registered, etc. Required by `client-sdk` FR-9 / design.md §4 so the
+ * in-memory transport's `connect()` can return a real handshake result
+ * instead of a placeholder tuple.
+ */
+export interface CapabilitiesInterface {
+  /** Read the current server capabilities snapshot. */
+  snapshot(): ServerHandshakeSnapshot;
+}
 
 /**
  * Public pairing API. Hosts (apps/server, MeshCraft) call `openWindow` to
@@ -112,6 +143,13 @@ export interface DiffuseCraftServer {
 
   /** Pairing-protocol API surface (see `PairingInterface`). */
   readonly pairing: PairingInterface;
+
+  /**
+   * Live capability snapshot surface. The SDK's in-memory transport
+   * reads this in `connect()` so its `HandshakeResult` reflects the real
+   * server state (`client-sdk` FR-9, design.md §4).
+   */
+  readonly capabilities: CapabilitiesInterface;
 }
 
 export type { Unsubscribe };

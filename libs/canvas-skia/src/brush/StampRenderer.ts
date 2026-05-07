@@ -175,6 +175,26 @@ export function createStampRenderer(): StampRenderer {
     d?.dispose?.();
   };
 
+  /**
+   * Tear down the per-stroke handles and reset state. Used by both
+   * `beginStroke` (defensive cleanup before restart) and `endStroke`
+   * (external idempotent dispose). Lives outside the `renderer` object so
+   * the worklet plugin doesn't have to resolve a self-reference (`renderer`)
+   * inside one of its own methods — the web bundle hoists those methods in
+   * a way that hits a TDZ on `renderer` otherwise.
+   */
+  const disposeStroke = (): void => {
+    'worklet';
+    state.active = false;
+    tryDispose(state.surface);
+    tryDispose(state.paint);
+    tryDispose(state.shader);
+    state.surface = null;
+    state.paint = null;
+    state.shader = null;
+    state.config = null;
+  };
+
   /** Draw one stamp into the given canvas using the pooled paint. */
   const drawOne = (canvas: SkCanvas, stamp: Stamp): void => {
     'worklet';
@@ -198,7 +218,7 @@ export function createStampRenderer(): StampRenderer {
       'worklet';
       if (state.active) {
         // Defensive: dispose the prior stroke before starting a new one.
-        renderer.endStroke();
+        disposeStroke();
       }
       state.config = next;
 
@@ -270,14 +290,7 @@ export function createStampRenderer(): StampRenderer {
         // Already disposed — idempotent.
         return;
       }
-      state.active = false;
-      tryDispose(state.surface);
-      tryDispose(state.paint);
-      tryDispose(state.shader);
-      state.surface = null;
-      state.paint = null;
-      state.shader = null;
-      state.config = null;
+      disposeStroke();
     },
 
     isActive(): boolean {

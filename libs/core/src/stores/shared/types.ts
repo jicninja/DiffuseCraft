@@ -33,6 +33,12 @@ export interface DiffuseCraftClientLike {
     name: string,
     args: TArgs,
   ): Promise<TResult>;
+  /**
+   * Read a `diffusecraft://` resource URI. Stores use this to hydrate
+   * paginated lists (models, presets, history) instead of round-tripping
+   * a list_* tool. Thrown errors are treated as failures.
+   */
+  readResource<TResult = unknown>(uri: string): Promise<TResult>;
 }
 
 /**

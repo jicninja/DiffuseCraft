@@ -57,6 +57,7 @@ interface CoreClientLike {
     name: string,
     args: TArgs,
   ): Promise<TResult>;
+  readResource<TResult = unknown>(uri: string): Promise<TResult>;
 }
 
 /**
@@ -124,6 +125,9 @@ export function toCoreClient(sdkClient: DiffuseCraftClient): CoreClientLike {
     },
     invokeTool<TArgs, TResult>(name: string, args: TArgs): Promise<TResult> {
       return sdkClient.invokeTool<TArgs, TResult>(name, args);
+    },
+    readResource<TResult>(uri: string): Promise<TResult> {
+      return sdkClient.readResource<TResult>(uri);
     },
   };
 }

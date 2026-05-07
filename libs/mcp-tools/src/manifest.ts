@@ -25,6 +25,7 @@ import * as undoRedoTools from "./tools/undo-redo";
 import * as imageReadTools from "./tools/image-read";
 import * as imageEditTools from "./tools/image-edit";
 import * as exportTools from "./tools/export";
+import * as chatTools from "./tools/chat";
 
 import { resourceCatalog } from "./resources/manifest";
 import { eventCatalog } from "./events/manifest";
@@ -101,6 +102,9 @@ export const catalog = defineCatalog({
     imageEditTools.uploadBlob,
     // Export (1)
     exportTools.exportImage,
+    // Chat (2) — external-agent-integration FR-30
+    chatTools.sendChatMessage,
+    chatTools.getChatHistory,
   ],
   resources: resourceCatalog,
   events: eventCatalog,

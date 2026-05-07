@@ -86,8 +86,13 @@ import { HistoryGc } from './history/gc.js';
 import { readHistoryList, readHistoryItem } from './resources/history-list.js';
 import { readUndoStack } from './resources/undo-stack.js';
 import { readRedoStack } from './resources/redo-stack.js';
+import { readModelsList } from './resources/models-list.js';
+import { readPresetsList } from './resources/presets-list.js';
+import { readServerInfo } from './resources/server-info.js';
 import { PresetRegistry } from './comfy/presets/registry.js';
+import { ModelRegistry } from './comfy/models/registry.js';
 import { HookRegistry } from './hooks/registry.js';
+import { InMemorySamplingRegistry } from './sampling/registry.js';
 import {
   applyHistoryItem as applyHistoryItemTool,
   cancelJob as cancelJobTool,
@@ -114,8 +119,16 @@ import {
   bakeMask as bakeMaskTool,
   undo as undoTool,
   redo as redoTool,
+  sendChatMessage as sendChatMessageTool,
+  getChatHistory as getChatHistoryTool,
+  type ServerCapabilities,
 } from '@diffusecraft/mcp-tools';
 import { createEnhancePromptHandler } from './prompt-enhancement/index.js';
+import {
+  InMemoryChatStore,
+  createSendChatMessageHandler,
+  createGetChatHistoryHandler,
+} from './chat/index.js';
 import { createLogger } from './logger.js';
 import { assertCatalogConformance, DEFAULT_CATALOG } from './catalog/registry.js';
 import { SUPPORTED_CATALOG_VERSION } from './catalog/types.js';
@@ -123,10 +136,12 @@ import type { CatalogManifest } from './catalog/types.js';
 import { assertUndoRedoConformance } from './conformance/undo-redo-conformance.js';
 
 import type {
+  CapabilitiesInterface,
   DiffuseCraftServer,
   EventsInterface,
   McpInterface,
   PairingInterface,
+  ServerHandshakeSnapshot,
 } from '../public-api.js';
 import { newId } from './id.js';
 
@@ -163,6 +178,10 @@ interface ServerInternals {
   pairing: PairingManager;
   hooks: HookRegistry;
   transports: MountedTransportSet;
+  /** Sampling-capable MCP peers register here at handshake time. */
+  samplingRegistry: InMemorySamplingRegistry;
+  /** Per-document in-memory chat store (external-agent-integration MVP). */
+  chatStore: InMemoryChatStore;
 }
 
 class DiffuseCraftServerImpl implements DiffuseCraftServer {
@@ -323,6 +342,56 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
         },
       }),
       readResource: (uri) => this.requireInternals().transports.inMemory.readResource(uri),
+    };
+  }
+
+  // ---- capabilities namespace ----------------------------------------------
+
+  /**
+   * Live capability snapshot consumed by the SDK's in-memory transport in
+   * `connect()` (`client-sdk` FR-9, design.md §4). Each call reads the
+   * current state — `comfyui_status` reflects the health monitor's most
+   * recent probe; `sampling_supported` is sourced from sampling forwarder
+   * state (false until a sampling-capable agent is registered).
+   */
+  get capabilities(): CapabilitiesInterface {
+    return {
+      snapshot: (): ServerHandshakeSnapshot => {
+        const internals = this.requireInternals();
+        const comfyStatus = internals.health.getStatus();
+        // Map the internal health-monitor enum → the catalog's
+        // `comfyui_status` enum. `unreachable` collapses to
+        // `disconnected` (the externally-visible failure mode).
+        const comfyui_status: ServerCapabilities['comfyui_status'] =
+          comfyStatus === 'healthy'
+            ? 'ready'
+            : comfyStatus === 'degraded' || comfyStatus === 'unreachable'
+              ? 'disconnected'
+              : 'unknown';
+        const serverCapabilities: ServerCapabilities = {
+          catalog_version_range: [SUPPORTED_CATALOG_VERSION, SUPPORTED_CATALOG_VERSION],
+          comfyui_status,
+          supported_workspaces: [
+            'Generate',
+            'Inpaint',
+            'Upscale',
+            'Live',
+            'CustomGraph',
+            'Animation',
+          ],
+          // Wired to false until a sampling-capable agent is registered.
+          // The prompt-enhancement handler's resolver also surfaces this
+          // dynamically per call; this snapshot reflects the boot-time
+          // default for in-memory consumers.
+          sampling_supported: false,
+          audit_log_enabled: true,
+        };
+        return {
+          serverCapabilities,
+          protocolVersion: '1',
+          serverName: this.config.host_name,
+        };
+      },
     };
   }
 
@@ -534,6 +603,18 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
     // presence check when the registry is absent. Once the model registry
     // wiring lands in this bootstrap, swap to `models: registry` here.
     const presets = new PresetRegistry();
+    // Model registry — populated from ComfyUI's `/object_info` once the
+    // health monitor sees the upstream go ready. Until then the registry
+    // is empty and `diffusecraft://models/list` returns an empty page,
+    // which is the right answer (the agent shouldn't reference models
+    // that aren't actually available locally).
+    const models = new ModelRegistry(db);
+    void this.refreshModelsWhenReady(models, comfy, logger);
+    // Sampling-capable agents (paired MCP clients that declared
+    // `sampling: {}` in `initialize`) register themselves here at handshake
+    // time. The `enhance_prompt` handler resolves a target through this
+    // registry; see `lib/sampling/registry.ts` and `mcp/server-factory.ts`.
+    const samplingRegistry = new InMemorySamplingRegistry();
     dispatcher.register(
       generateImageTool,
       createGenerateImageHandler({ db, tracker: jobs, presets }),
@@ -578,7 +659,11 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
     const selectionStore = new SelectionStore(db);
     dispatcher.register(
       setSelectionTool,
-      createSetSelectionHandler(db, selectionStore),
+      // B.6 magic-wand server-side: pass `assets` so the handler can
+      // read layer RGBA blobs and persist composed masks. Without
+      // `assets` magic_wand still degrades to `MAGIC_WAND_NOT_WIRED`
+      // — every other shape kind keeps working.
+      createSetSelectionHandler({ db, store: selectionStore, assets }),
     );
     dispatcher.register(
       getSelectionTool,
@@ -665,7 +750,29 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
           sampling: this.config.sampling,
           prompt_enhancement: this.config.prompt_enhancement,
         },
+        samplingRegistry,
       }),
+    );
+
+    // 9-sext. Chat handlers (external-agent-integration MVP, FR-30..FR-36).
+    // Same sampling target resolution as `enhance_prompt` — chat shares
+    // the configured default agent until `chat_agent_token_name` (FR-35)
+    // is wired separately. In-memory store; SQLite persistence is a
+    // post-MVP follow-up (tasks.md Phase C).
+    const chatStore = new InMemoryChatStore();
+    dispatcher.register(
+      sendChatMessageTool,
+      createSendChatMessageHandler({
+        chatStore,
+        samplingRegistry,
+        ...(this.config.sampling.default_agent_token_name !== undefined
+          ? { defaultAgentTokenName: this.config.sampling.default_agent_token_name }
+          : {}),
+      }),
+    );
+    dispatcher.register(
+      getChatHistoryTool,
+      createGetChatHistoryHandler({ chatStore }),
     );
 
     // 10. Register custom tools from config + hook registry.
@@ -715,6 +822,14 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
       // ctx so reversible handlers route mutations through
       // `ctx.undoRedo.execute(...)` (FR-34, design.md §11).
       undoRedo: undo,
+      // pairing-protocol / prompt-enhancement: stdio + HTTP register
+      // sampling-capable MCP peers here when they advertise the
+      // `sampling: {}` capability during `initialize`. The
+      // `enhance_prompt` handler reads this registry via
+      // {@link resolveSamplingTarget}.
+      samplingRegistry,
+      catalog: this.catalog,
+      serverInfo: { name: this.config.host_name, version: SUPPORTED_CATALOG_VERSION },
     });
 
     // 12-bis. Register history resources on the in-memory transport
@@ -751,6 +866,43 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
         const fields = parseFieldsQuery(query['fields']);
         return readHistoryItem(db, history, id, fields);
       },
+    );
+
+    // 12-bis-2. Models / presets / server-info resources. These are the
+    // first reads a paired MCP agent makes — `models/list` and
+    // `presets/list` to pick a checkpoint, `server/info` for the
+    // "you-are-here" map (FR-54).
+    transports.inMemory.registerResource(
+      'diffusecraft://models/list',
+      (_uri, query) => {
+        const fields = parseFieldsQuery(query['fields']);
+        return readModelsList(models, {
+          ...(typeof query['kind'] === 'string' ? { kind: query['kind'] } : {}),
+          ...(typeof query['cursor'] === 'string' ? { cursor: query['cursor'] } : {}),
+          ...(typeof query['limit'] === 'string' ? { limit: Number(query['limit']) } : {}),
+          ...(fields !== undefined ? { fields } : {}),
+        });
+      },
+    );
+    transports.inMemory.registerResource(
+      'diffusecraft://presets/list',
+      (_uri, query) => {
+        const fields = parseFieldsQuery(query['fields']);
+        return readPresetsList(presets, {
+          ...(typeof query['cursor'] === 'string' ? { cursor: query['cursor'] } : {}),
+          ...(typeof query['limit'] === 'string' ? { limit: Number(query['limit']) } : {}),
+          ...(fields !== undefined ? { fields } : {}),
+        });
+      },
+    );
+    transports.inMemory.registerResource('diffusecraft://server/info', () =>
+      readServerInfo({
+        serverName: this.config.host_name,
+        catalogVersionRange: [SUPPORTED_CATALOG_VERSION, SUPPORTED_CATALOG_VERSION],
+        health,
+        mountedTransports: transports.describe(),
+        auditLogEnabled: true,
+      }),
     );
 
     // 12-ter. Register undo-redo stack resources on the in-memory transport
@@ -826,6 +978,8 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
       transports,
       health,
       outputs,
+      samplingRegistry,
+      chatStore,
     };
   }
 
@@ -890,6 +1044,25 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
       throw new Error('server not started; call start() first');
     }
     return this.internals;
+  }
+
+  /**
+   * Background refresh: poll the comfy bus for the first `comfyui.status`
+   * transition to `healthy`, then walk `/object_info` to populate the
+   * model registry. Failures are logged and dropped so a missing ComfyUI
+   * never gates server startup.
+   */
+  private refreshModelsWhenReady(
+    models: ModelRegistry,
+    comfy: ComfyClient,
+    logger: Logger,
+  ): Promise<void> {
+    return models.refresh(comfy).catch((err: unknown) => {
+      logger.info(
+        { err: (err as Error).message },
+        'model registry refresh deferred (ComfyUI not reachable yet)',
+      );
+    });
   }
 
   private emit(event: ServerLifecycleEvent): void {

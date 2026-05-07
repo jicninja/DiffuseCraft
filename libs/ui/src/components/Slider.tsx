@@ -68,10 +68,21 @@ function Slider({
 }: SliderProps) {
   const [width, setWidth] = React.useState(0);
   const offset = useSharedValue(0);
+  // Guard for the controlled-value mirror effect below. While the user is
+  // dragging the thumb, the worklet `offset.value` is the source of truth
+  // and incoming `value` prop updates (echoes of our own `onValueChange`
+  // calls round-tripping through the parent state) must NOT clobber it.
+  // Without this guard, every drag tick produces:
+  //   worklet sets offset → runOnJS(commit) → parent re-renders → mirror
+  //   effect resets offset to the stale committed value → next worklet
+  //   tick adds `e.changeX` to the snapped-back offset → thumb stutters.
+  const dragging = React.useRef(false);
 
-  // Mirror controlled `value` -> `offset` whenever the parent updates it.
+  // Mirror controlled `value` -> `offset` whenever the parent updates it,
+  // EXCEPT during an active drag — see `dragging` ref above.
   React.useEffect(() => {
     if (width <= 0) return;
+    if (dragging.current) return;
     const ratio = (value - min) / Math.max(1e-9, max - min);
     offset.value = clamp(ratio * width, 0, width);
   }, [value, min, max, width, offset]);
@@ -87,9 +98,23 @@ function Slider({
     [onValueChange]
   );
 
+  // JS-thread setters for `dragging`. Worklets must reach the JS-thread
+  // ref via `runOnJS`; capturing a ref directly inside the worklet body
+  // would freeze it under Reanimated's serialization model.
+  const setDraggingTrue = React.useCallback(() => {
+    dragging.current = true;
+  }, []);
+  const setDraggingFalse = React.useCallback(() => {
+    dragging.current = false;
+  }, []);
+
   const pan = React.useMemo(() => {
     return Gesture.Pan()
       .enabled(!disabled)
+      .onBegin(() => {
+        'worklet';
+        runOnJS(setDraggingTrue)();
+      })
       .onChange((e) => {
         'worklet';
         if (width <= 0) return;
@@ -99,8 +124,22 @@ function Slider({
         const raw = min + ratio * (max - min);
         const quant = quantize(raw, step, min);
         runOnJS(commit)(clamp(quant, min, max));
+      })
+      .onFinalize(() => {
+        'worklet';
+        runOnJS(setDraggingFalse)();
       });
-  }, [disabled, width, min, max, step, offset, commit]);
+  }, [
+    disabled,
+    width,
+    min,
+    max,
+    step,
+    offset,
+    commit,
+    setDraggingTrue,
+    setDraggingFalse,
+  ]);
 
   const rangeStyle = useAnimatedStyle(() => ({ width: offset.value }));
   const thumbStyle = useAnimatedStyle(() => ({ transform: [{ translateX: offset.value - 8 }] }));

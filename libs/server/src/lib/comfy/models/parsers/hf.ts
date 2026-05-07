@@ -31,6 +31,12 @@ export function parseHf(id: string, defaultFilename?: string): HfResolved {
   if (!filename) {
     throw new ComfyError(`hf id "${id}" lacks a filename — pass it as ${id}:<filename> or via DefaultModel.filename`);
   }
-  const url = `https://huggingface.co/${repo}/resolve/main/${encodeURIComponent(filename)}`;
+  // HF stores files in nested paths (e.g. `sdxl_models/ip-adapter_sdxl.safetensors`).
+  // Encode each path segment individually so directory separators stay raw `/`.
+  const encodedPath = filename
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  const url = `https://huggingface.co/${repo}/resolve/main/${encodedPath}`;
   return { registry: 'hf', repo, filename, url };
 }

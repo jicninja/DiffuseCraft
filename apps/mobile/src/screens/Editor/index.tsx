@@ -19,6 +19,7 @@ import { useRouter } from 'expo-router';
 
 import { BottomPromptBar } from './BottomPromptBar';
 import { CanvasArea } from './CanvasArea';
+import { EditorDocumentProvider } from './EditorDocumentContext';
 import { InpaintModeChips } from './InpaintModeChips';
 import { LeftToolRail } from './LeftToolRail';
 import { LiveSettingsCard } from './LiveSettingsCard';
@@ -37,7 +38,18 @@ export interface EditorScreenProps {
   chat?: boolean;
 }
 
-export function EditorScreen({ documentId, workspace, chat }: EditorScreenProps) {
+export function EditorScreen(props: EditorScreenProps) {
+  // Wrap the editor in the document provider before any child renders so
+  // `useDocumentBootstrap` (which writes into the context) and the layers
+  // panel (which mutates via the same context) share one source of truth.
+  return (
+    <EditorDocumentProvider>
+      <EditorScreenInner {...props} />
+    </EditorDocumentProvider>
+  );
+}
+
+function EditorScreenInner({ documentId, workspace, chat }: EditorScreenProps) {
   const router = useRouter();
   const state = useEditorState({ workspace, chat });
   const doc = useDocumentBootstrap(documentId);

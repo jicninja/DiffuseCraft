@@ -7,11 +7,14 @@
  * shape composes with the existing selection.
  *
  * For Tier 1 the handler delegates the geometry math to canvas-core and
- * persists the result via {@link SelectionStore}. Magic-wand deferred
- * variant ("server samples the layer pixels") is a stub: we accept the
- * shape, persist a mask reference if the caller already pre-rasterized
- * the layer (via `mask` kind), and mark the magic-wand kind as needing
- * Tier 2 server-side raster sampling — a follow-up impl wires it.
+ * persists the result via {@link SelectionStore}. Magic-wand server-side
+ * (B.6) reads the active layer's RGBA blob via {@link MaskAssetStore},
+ * runs canvas-core's `magicWandSelect` against it, optionally composes
+ * with the prior selection per `op`, and persists the resulting mask as
+ * a fresh blob — preserving precision instead of going through the
+ * lossy rect/polygon `reduceShape` fallback used by Tier 1 primitives.
+ * Composite-raster sampling and `layer_id`-omitted callers still fall
+ * back to a structured error until a composite cache is plumbed.
  *
  * Reversibility: the handler captures the prior selection on the fly,
  * builds a parametric {@link Command}, and routes it through
@@ -25,6 +28,7 @@ import {
   applyOp,
   composeMasks,
   invertMask,
+  magicWandSelect,
   maskBounds,
   rectToMask,
   polygonToMask,
@@ -45,6 +49,7 @@ import { buildCommand, type Command } from '../undo-redo/command.js';
 import { SelectionStore, type PersistedSelection } from '../selection/store.js';
 import { selectionBBox } from '../selection/bounds.js';
 import { persistedToCore } from '../selection/encoding.js';
+import { encodeMaskBlob, type MaskAssetStore } from './mask/shared.js';
 
 type Input = z.infer<typeof setSelectionTool.inputSchema>;
 type Output = z.infer<typeof setSelectionTool.outputSchema>;
@@ -128,10 +133,22 @@ const composeSelections = (args: {
   return reduceShape(composed);
 };
 
+export interface SetSelectionHandlerDeps {
+  readonly db: DB;
+  readonly store: SelectionStore;
+  /**
+   * Asset store for layer-blob reads + mask-blob writes used by B.6
+   * magic-wand server-side. When omitted the magic-wand path keeps
+   * returning `MAGIC_WAND_NOT_WIRED` so callers can fall back to the
+   * client-side `magicWandSelect` + `kind: "mask"` submit pattern.
+   */
+  readonly assets?: MaskAssetStore;
+}
+
 export function createSetSelectionHandler(
-  db: DB,
-  store: SelectionStore,
+  deps: SetSelectionHandlerDeps,
 ): ToolHandler<typeof setSelectionTool.inputSchema, typeof setSelectionTool.outputSchema> {
+  const { db, store, assets } = deps;
   return async (input: Input, ctx: HandlerContext): Promise<Output> => {
     const document_id =
       input.document_id ?? (ctx as unknown as { document_id?: string }).document_id;
@@ -145,6 +162,22 @@ export function createSetSelectionHandler(
     const op: SelectionOp = (input.op as SelectionOp) ?? 'replace';
     const prior = store.getOrNone(document_id);
 
+    // FR-6/FR-7/FR-8: B.6 magic-wand server-side. Resolve against the
+    // layer's RGBA blob and compose with `prior` per `op`, persisting the
+    // result as a fresh mask blob so precision is preserved (the lossy
+    // `reduceShape` fallback would corner-approximate the wand mask).
+    if (input.shape.kind === 'magic_wand') {
+      const next = await resolveMagicWand({
+        shape: input.shape,
+        doc,
+        prior,
+        op,
+        assets,
+        db,
+      });
+      return runUndoable(ctx, store, document_id, prior, next, op);
+    }
+
     const next = computeNextSelection({
       input,
       doc,
@@ -152,36 +185,46 @@ export function createSetSelectionHandler(
       op,
     });
 
-    // Capture the pre-state under a stable name so both apply() and
-    // revert() can close over it. The manager calls apply() inside
-    // execute(); revert() runs only on undo.
-    const before = prior;
-
-    const apply = async (): Promise<Output> => {
-      store.set({ document_id, selection: next });
-      const bbox = selectionBBox(next) ?? undefined;
-      return { active: next.kind !== 'none', bbox };
-    };
-    const revert = async (): Promise<void> => {
-      store.set({ document_id, selection: before });
-    };
-
-    // FR-34: route through the manager. Selection ops do not touch
-    // layers, so `affected_layer_ids` is omitted (scope-unknown ⇒
-    // never flagged as conflicting — selection edits don't conflict
-    // with concurrent layer mutations by definition).
-    const command: Command<Output> = buildCommand<Output>({
-      tool_name: 'set_selection',
-      document_id,
-      args_summary: `set_selection (${next.kind}, op=${op})`,
-      weight: 'small',
-      apply,
-      revert,
-    });
-    const tokenId = ctx.token_id ?? ctx.token_name;
-    return ctx.undoRedo.execute(ctx.token_name, tokenId, document_id, command);
+    return runUndoable(ctx, store, document_id, prior, next, op);
   };
 }
+
+/**
+ * Build the parametric Command and route it through {@link HandlerContext.undoRedo}
+ * (FR-34 / design.md §11). Shared between the synchronous primitive path
+ * and the async magic-wand path so both honour the same undo contract.
+ *
+ * Selection ops do not touch layers, so `affected_layer_ids` is omitted
+ * (scope-unknown ⇒ never flagged as conflicting — selection edits don't
+ * conflict with concurrent layer mutations by definition).
+ */
+const runUndoable = async (
+  ctx: HandlerContext,
+  store: SelectionStore,
+  document_id: string,
+  before: PersistedSelection,
+  next: PersistedSelection,
+  op: SelectionOp,
+): Promise<Output> => {
+  const apply = async (): Promise<Output> => {
+    store.set({ document_id, selection: next });
+    const bbox = selectionBBox(next) ?? undefined;
+    return { active: next.kind !== 'none', bbox };
+  };
+  const revert = async (): Promise<void> => {
+    store.set({ document_id, selection: before });
+  };
+  const command: Command<Output> = buildCommand<Output>({
+    tool_name: 'set_selection',
+    document_id,
+    args_summary: `set_selection (${next.kind}, op=${op})`,
+    weight: 'small',
+    apply,
+    revert,
+  });
+  const tokenId = ctx.token_id ?? ctx.token_name;
+  return ctx.undoRedo.execute(ctx.token_name, tokenId, document_id, command);
+};
 
 interface ComputeArgs {
   input: Input;
@@ -241,17 +284,16 @@ const computeNextSelection = (args: ComputeArgs): PersistedSelection => {
       };
     }
     case 'magic_wand': {
-      // FR-6/FR-7/FR-8 server path. The Tier 1 implementation requires
-      // the caller to either submit pre-rasterized magic-wand results via
-      // `kind: 'mask'` (preferred) or to inline a polygon fallback. To
-      // keep the catalog promise truthful we accept the shape but emit a
-      // structured error explaining the missing layer-pixel-fetch wiring.
-      // This will be lifted once the active layer's blob fetch is plumbed
-      // through to the magic-wand pipeline.
+      // Unreachable in production: `createSetSelectionHandler` intercepts
+      // `magic_wand` shapes before this synchronous reducer is called, so
+      // the layer-blob fetch + composition can run async (see
+      // `resolveMagicWand`). The branch survives so the discriminated
+      // union remains exhaustive and so direct callers of `__internals`
+      // (test harness) get a clear, actionable error.
       throw new ServerError({
         code: 'MAGIC_WAND_NOT_WIRED',
         message:
-          'set_selection({ kind: "magic_wand" }) needs the active-layer blob fetch wired to the server-side magic-wand pipeline. Until then, run magicWandSelect() client-side and submit the result via `kind: "mask"`.',
+          'computeNextSelection cannot reduce magic_wand shapes synchronously — call the full handler so resolveMagicWand can fetch the layer blob.',
       });
     }
     case 'modify': {
@@ -291,11 +333,151 @@ const computeNextSelection = (args: ComputeArgs): PersistedSelection => {
   }
 };
 
+/**
+ * Resolve a `magic_wand` shape against a real layer's RGBA bytes (B.6).
+ *
+ * The shape is evaluated server-side via {@link magicWandSelect} from
+ * canvas-core, then composed with `prior` per `op` at the mask level so
+ * the result keeps full pixel precision. The composed mask is written
+ * to {@link MaskAssetStore} and persisted as a `kind: 'mask'` selection
+ * pointing at the new blob — `reduceShape`'s 4-corner polygon fallback
+ * is intentionally bypassed because it would lose all interior detail.
+ *
+ * Hard pre-conditions surface as structured errors rather than silent
+ * fallbacks:
+ *   - `MAGIC_WAND_NOT_WIRED` — handler started without a `MaskAssetStore`
+ *     (the legacy stub mode for hosts that haven't bootstrapped assets).
+ *   - `MAGIC_WAND_COMPOSITE_NOT_WIRED` — `sample_composite: true` requires
+ *     the composite raster cache, which lands with the renderer pipeline.
+ *   - `MAGIC_WAND_LAYER_REQUIRED` — `layer_id` was omitted; without the
+ *     composite path the server has no implicit "active layer".
+ *   - `NOT_FOUND` / `INVALID_INPUT` — layer missing, on a different
+ *     document, or has no rasterized content yet.
+ *   - `UNSUPPORTED_LAYER_RASTER` — the layer's blob is not raw-RGBA at
+ *     the document's dimensions (PNG decode lives in host-specific
+ *     codecs; this server-only path keeps the byte contract narrow).
+ */
+interface ResolveMagicWandArgs {
+  shape: Extract<Input['shape'], { kind: 'magic_wand' }>;
+  doc: DocumentRow;
+  prior: PersistedSelection;
+  op: SelectionOp;
+  assets: MaskAssetStore | undefined;
+  db: DB;
+}
+
+interface LayerRasterRow {
+  id: string;
+  document_id: string;
+  content_blob_id: string | null;
+}
+
+const resolveMagicWand = async (
+  args: ResolveMagicWandArgs,
+): Promise<PersistedSelection> => {
+  const { shape, doc, prior, op, assets, db } = args;
+  if (!assets) {
+    throw new ServerError({
+      code: 'MAGIC_WAND_NOT_WIRED',
+      message:
+        'set_selection({ kind: "magic_wand" }) requires a server-side MaskAssetStore. Run magicWandSelect() client-side and submit the result via `kind: "mask"` until the host wires `assets` into createSetSelectionHandler.',
+    });
+  }
+  if (shape.sample_composite) {
+    throw new ServerError({
+      code: 'MAGIC_WAND_COMPOSITE_NOT_WIRED',
+      message:
+        'set_selection({ kind: "magic_wand", sample_composite: true }) needs the composite raster cache, which lands with the renderer pipeline. Sample a specific layer (`layer_id`) for now.',
+    });
+  }
+  if (!shape.layer_id) {
+    throw new ServerError({
+      code: 'MAGIC_WAND_LAYER_REQUIRED',
+      message:
+        'set_selection({ kind: "magic_wand" }) requires `layer_id` until composite sampling lands. Pass the active layer id explicitly.',
+    });
+  }
+  const layer = db
+    .prepare<string, LayerRasterRow>(
+      'SELECT id, document_id, content_blob_id FROM layers WHERE id = ?',
+    )
+    .get(shape.layer_id);
+  if (!layer) {
+    throw new ServerError({
+      code: 'NOT_FOUND',
+      message: `magic_wand: layer not found: ${shape.layer_id}`,
+    });
+  }
+  if (layer.document_id !== doc.id) {
+    throw new ServerError({
+      code: 'INVALID_INPUT',
+      message: `magic_wand: layer ${shape.layer_id} belongs to document ${layer.document_id}, not ${doc.id}`,
+    });
+  }
+  if (!layer.content_blob_id) {
+    throw new ServerError({
+      code: 'INVALID_INPUT',
+      message: `magic_wand: layer ${shape.layer_id} has no rasterized content yet`,
+    });
+  }
+  const blob = await assets.read(layer.content_blob_id);
+  if (!blob) {
+    throw new ServerError({
+      code: 'NOT_FOUND',
+      message: `magic_wand: layer blob ${layer.content_blob_id} not found in asset store`,
+    });
+  }
+  const expectedRgba = doc.w * doc.h * 4;
+  if (blob.bytes.byteLength !== expectedRgba) {
+    throw new ServerError({
+      code: 'UNSUPPORTED_LAYER_RASTER',
+      message: `magic_wand: layer blob is ${blob.bytes.byteLength} bytes, expected raw RGBA ${expectedRgba} (${doc.w}×${doc.h}×4). PNG decode is host-specific and not wired into this handler.`,
+    });
+  }
+  // Buffer is a Node subclass of Uint8Array; copy out a clean view at
+  // exactly the expected length so canvas-core's bounds check passes.
+  const rgba = new Uint8Array(expectedRgba);
+  rgba.set(blob.bytes.subarray(0, expectedRgba));
+
+  const wandMask = magicWandSelect({
+    imageBytes: rgba,
+    width: doc.w,
+    height: doc.h,
+    tapPoint: shape.tap_point,
+    tolerance: shape.tolerance,
+    contiguous: shape.contiguous,
+  });
+
+  const composed: RasterMask =
+    op === 'replace'
+      ? wandMask
+      : composeMasks(
+          selectionToMask(persistedToCore(prior), doc.w, doc.h),
+          wandMask,
+          op,
+        );
+
+  // Empty result short-circuits to `none` instead of writing a
+  // zero-byte-meaningful blob — keeps the asset store clean and matches
+  // `reduceShape`'s contract for empty masks.
+  if (!maskBounds(composed)) return { kind: 'none' };
+
+  const encoded = encodeMaskBlob(composed.data);
+  const written = await assets.write({ bytes: encoded.bytes, mime: encoded.mime });
+  return {
+    kind: 'mask',
+    blob_id: written.id,
+    width: doc.w,
+    height: doc.h,
+  };
+};
+
 /** Internal: surfaced for test harness reuse. */
 export const __internals = {
   reduceShape,
   composeSelections,
   computeNextSelection,
+  resolveMagicWand,
   applyOp,
   rectToMask,
   polygonToMask,

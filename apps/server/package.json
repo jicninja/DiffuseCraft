@@ -8,6 +8,7 @@
     "diffusecraft-server": "./src/index.ts"
   },
   "scripts": {
+    "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

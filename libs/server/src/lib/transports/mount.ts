@@ -16,6 +16,8 @@ import type { PairingManager } from '../pairing/manager.js';
 import type { MountedTransports } from '../../types/lifecycle.js';
 import type { ConnectionTracker } from './connection-tracker.js';
 import type { UndoRedoManagerLike } from '../../types/handler-context.js';
+import type { CatalogManifest } from '../catalog/types.js';
+import type { InMemorySamplingRegistry } from '../sampling/registry.js';
 import { InMemoryTransport } from './in-memory.js';
 import { StdioTransport } from './stdio.js';
 import { HttpTransport } from './http.js';
@@ -58,10 +60,29 @@ export interface MountArgs {
    * surface a clear error from the per-transport stub.
    */
   undoRedo?: UndoRedoManagerLike;
+  /** Catalog used by the SDK transports for `tools/list` + `resources/list`. */
+  catalog: CatalogManifest;
+  /** Sampling registry — sampling-capable peers register here when they connect. */
+  samplingRegistry?: InMemorySamplingRegistry;
+  /** Server identity surfaced in MCP `initialize` responses. */
+  serverInfo: { name: string; version: string };
 }
 
 export async function mountTransports(args: MountArgs): Promise<MountedTransportSet> {
-  const { config, db, dispatcher, bus, audit, logger, pairing, connectionTracker, undoRedo } = args;
+  const {
+    config,
+    db,
+    dispatcher,
+    bus,
+    audit,
+    logger,
+    pairing,
+    connectionTracker,
+    undoRedo,
+    catalog,
+    samplingRegistry,
+    serverInfo,
+  } = args;
 
   const inMemory = new InMemoryTransport(
     dispatcher,
@@ -77,7 +98,17 @@ export async function mountTransports(args: MountArgs): Promise<MountedTransport
 
   let stdio: StdioTransport | undefined;
   if (config.transports.stdio) {
-    stdio = new StdioTransport(dispatcher, bus, audit, logger, undoRedo);
+    stdio = new StdioTransport({
+      catalog,
+      dispatcher,
+      bus,
+      audit,
+      logger,
+      resources: inMemory,
+      serverInfo,
+      ...(undoRedo ? { undoRedo } : {}),
+      ...(samplingRegistry ? { samplingRegistry } : {}),
+    });
     await stdio.start();
   }
 
@@ -88,9 +119,13 @@ export async function mountTransports(args: MountArgs): Promise<MountedTransport
       host: config.transports.http.host,
       port: config.transports.http.port,
       body_limit_bytes: config.comfyui_proxy.rate_limits.max_payload_bytes,
+      catalog,
+      resources: inMemory,
+      serverInfo,
       ...(pairing ? { pairing } : {}),
       ...(connectionTracker ? { connectionTracker } : {}),
       ...(undoRedo ? { undoRedo } : {}),
+      ...(samplingRegistry ? { samplingRegistry } : {}),
     });
     const r = await http.start();
     httpUrl = r.url;

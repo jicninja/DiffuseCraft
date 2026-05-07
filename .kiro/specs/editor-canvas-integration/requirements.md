@@ -111,7 +111,11 @@ This spec does **NOT** produce:
 
 **FR-12 (Event-driven).** WHEN the user taps "+ Add layer", THE Layer_Panel SHALL create a new paint layer using `addLayer` from `canvas-core`, update the Editor_Store's layers array, and set the new layer as active.
 
-**FR-13 (Event-driven).** WHEN the user swipes left on a layer row, THE Layer_Panel SHALL remove the layer using `removeLayer` from `canvas-core` and update the Editor_Store.
+**FR-13 (Event-driven).** WHEN the user swipes left on a non-first layer row, THE Layer_Panel SHALL reveal a Delete action button at the trailing edge of the row WITHOUT mutating any state — the swipe alone is never sufficient to delete. (Rationale: an in-pocket scroll, an accidental gesture during canvas zoom, or a stray pencil flick must not destroy work; deletion requires an explicit, two-step intent.)
+
+**FR-13a (Event-driven).** WHEN the user taps the revealed Delete button on a swipe-opened layer row, THE Layer_Panel SHALL close the swipeable, remove the layer using `removeLayer` from `canvas-core`, and update the Editor_Store. The swipe-open + tap-Delete pair is the ONLY user-facing path to layer deletion.
+
+**FR-13b (Ubiquitous).** THE first (bottom-most, position 0) layer of a document SHALL be undeletable. THE Layer_Panel SHALL render the first row WITHOUT a swipeable wrapper, so no Delete affordance is reachable on it. THE `removeLayerById` action in `EditorDocumentContext` SHALL additionally reject removing the layer at position 0 as defense-in-depth, so any non-UI path (keyboard shortcut, future programmatic delete, MCP tool call) hits the same guard. (Rationale: the bottom layer is the canvas/background — under P28 the document is raster-always, so the base layer is the document's only guaranteed raster surface; deleting it would leave the document with no base content, which is never a valid state.)
 
 **FR-14 (Event-driven).** WHEN the user drags a layer row to reorder, THE Layer_Panel SHALL update the layer positions using `updateLayer` from `canvas-core` and update the Editor_Store.
 

@@ -17,7 +17,7 @@ const config: ExpoConfig = {
   // newArchEnabled lives outside ExpoConfig's typed surface in SDK 51; set
   // it via the experimental flag bag without breaking tsc.
   ...({ newArchEnabled: true } as Record<string, unknown>),
-  platforms: ['ios', 'android'], // web excluded per tech.md
+  platforms: ['ios', 'android', 'web'], // web added as experimental RN-Web probe (canvas-skia will fail)
   // splash: {
   //   image: './assets/splash.png',
   //   resizeMode: 'contain',

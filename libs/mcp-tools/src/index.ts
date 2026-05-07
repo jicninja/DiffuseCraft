@@ -24,3 +24,4 @@ export * from "./tools/selection";
 export * from "./tools/layers";
 export * from "./tools/masks";
 export * from "./tools/undo-redo";
+export * from "./tools/chat";

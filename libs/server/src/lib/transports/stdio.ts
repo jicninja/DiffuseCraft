@@ -1,95 +1,107 @@
 /**
  * stdio transport (E.2, FR-16).
  *
- * Mounted only when `config.transports.stdio === true`. Auth is trust-by-
- * process — Claude Desktop / agent CLI spawning the server inherits the
- * caller's identity at the OS level. We log every call under a synthetic
- * `_stdio` token name.
+ * Mounted only when `config.transports.stdio === true`. Auth is
+ * trust-by-process — Claude Desktop / agent CLI spawning the server
+ * inherits the caller's identity at the OS level. We log every call
+ * under a synthetic `_stdio` token name.
  *
- * Real wiring: `@modelcontextprotocol/sdk/server/stdio` exposes the inbound
- * channel; we forward to the dispatcher.
+ * Wires the `@modelcontextprotocol/sdk` server's `StdioServerTransport`
+ * into our shared {@link createMcpServerInstance} factory so an external
+ * MCP client (Claude Code, Codex, Gemini CLI in stdio mode, …) can:
  *
- * TODO(server-architecture): integrate the SDK transport once the
- * dispatcher integration test harness is in place. The skeleton below
- * registers start/stop and a request shim so the lifecycle code can mount
- * + unmount; the actual MCP framing is left to the SDK on connect.
+ *   - Negotiate `initialize` and discover server capabilities.
+ *   - List + call every tool the dispatcher has registered.
+ *   - List + read catalog resources via the in-memory transport's
+ *     resolver registry.
+ *   - Receive server → client `sampling/createMessage` requests when the
+ *     `enhance_prompt` handler routes to this session.
  */
 
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { Logger } from 'pino';
+
+import type { CatalogManifest } from '../catalog/types.js';
 import type { HandlerDispatcher } from '../dispatcher.js';
 import type { EventBus } from '../events/bus.js';
 import type { AuditLog } from '../audit/log.js';
-import type { HandlerContext, UndoRedoManagerLike } from '../../types/handler-context.js';
-import { newRequestId } from '../id.js';
+import type { InMemoryTransport } from './in-memory.js';
+import type { UndoRedoManagerLike } from '../../types/handler-context.js';
+import { createMcpServerInstance } from '../mcp/server-factory.js';
+import type { InMemorySamplingRegistry } from '../sampling/registry.js';
+
+const STDIO_TOKEN_NAME = '_stdio';
+
+export interface StdioTransportDeps {
+  catalog: CatalogManifest;
+  dispatcher: HandlerDispatcher;
+  bus: EventBus;
+  audit: AuditLog;
+  logger: Logger;
+  resources: Pick<InMemoryTransport, 'readResource'>;
+  undoRedo?: UndoRedoManagerLike;
+  /** Optional sampling registry; when present, sampling-capable peers register here. */
+  samplingRegistry?: InMemorySamplingRegistry;
+  serverInfo: { name: string; version: string };
+}
 
 export class StdioTransport {
   private mounted = false;
+  private sdkTransport: StdioServerTransport | null = null;
+  private unregisterSampling: (() => void) | null = null;
 
-  constructor(
-    private readonly dispatcher: HandlerDispatcher,
-    private readonly bus: EventBus,
-    private readonly audit: AuditLog,
-    private readonly logger: Logger,
-    /**
-     * Undo/redo manager facade — stamped onto every handler ctx so
-     * reversible handlers can call `ctx.undoRedo.execute(...)`
-     * (undo-redo-system FR-34). Optional so existing tests that mount
-     * stdio without the full server bootstrap keep working; in that
-     * case the stub at the bottom of this file throws on use.
-     */
-    private readonly undoRedo?: UndoRedoManagerLike,
-  ) {}
+  constructor(private readonly deps: StdioTransportDeps) {}
 
   async start(): Promise<void> {
     if (this.mounted) return;
     this.mounted = true;
-    // TODO(server-architecture): replace with @modelcontextprotocol/sdk
-    // stdio transport. The SDK will deliver tool invocations into
-    // `this.dispatchInvocation(name, args)` once attached.
-    this.logger.info('stdio transport mounted (skeleton)');
+
+    const undoRedo = this.deps.undoRedo ?? STUB_UNDO_REDO;
+    const instance = createMcpServerInstance({
+      catalog: this.deps.catalog,
+      dispatcher: this.deps.dispatcher,
+      resources: this.deps.resources,
+      bus: this.deps.bus,
+      audit: this.deps.audit,
+      logger: this.deps.logger,
+      serverInfo: this.deps.serverInfo,
+      undoRedo,
+      identity: {
+        token_id: null,
+        token_name: STDIO_TOKEN_NAME,
+        transport: 'stdio',
+      },
+      onInitialized: ({ clientCapabilities }) => {
+        const samplingClient = instance.buildSamplingClient(clientCapabilities);
+        if (samplingClient && this.deps.samplingRegistry) {
+          this.unregisterSampling = this.deps.samplingRegistry.add(samplingClient);
+          this.deps.logger.info(
+            { agent: STDIO_TOKEN_NAME },
+            'stdio MCP client registered as sampling target',
+          );
+        }
+      },
+    });
+
+    const sdk = new StdioServerTransport();
+    this.sdkTransport = sdk;
+    await instance.server.connect(sdk);
+    this.deps.logger.info('stdio transport mounted (MCP SDK wired)');
   }
 
   async stop(): Promise<void> {
     if (!this.mounted) return;
     this.mounted = false;
-    this.logger.info('stdio transport unmounted');
-  }
-
-  /** Helper used by the SDK adaptor (once wired) to dispatch a call. */
-  async dispatchInvocation(name: string, args: unknown): Promise<unknown> {
-    const ctx: HandlerContext = {
-      request_id: newRequestId(),
-      transport: 'stdio',
-      token_id: null,
-      token_name: '_stdio',
-      received_at: Date.now(),
-      publish: (event) => this.bus.publish(event),
-      audit: ({ operation, outcome, latency_ms, args_summary }) =>
-        void this.audit.append({
-          token_id: null,
-          token_name: '_stdio',
-          operation,
-          outcome,
-          latency_ms,
-          args_summary,
-        }),
-      logger: {
-        info: (...rest) => this.logger.info(...rest),
-        error: (...rest) => this.logger.error(...rest),
-      },
-      undoRedo: this.undoRedo ?? STUB_UNDO_REDO,
-    };
-    return this.dispatcher.dispatch(name, args, ctx);
+    this.unregisterSampling?.();
+    this.unregisterSampling = null;
+    if (this.sdkTransport) {
+      await this.sdkTransport.close();
+      this.sdkTransport = null;
+    }
+    this.deps.logger.info('stdio transport unmounted');
   }
 }
 
-/**
- * Defensive stub used when stdio is constructed without a real
- * {@link UndoRedoManagerLike}. Calling `execute` throws synchronously
- * so misconfiguration surfaces immediately; non-reversible handlers
- * keep working in stripped-down test harnesses since they never reach
- * for `ctx.undoRedo`.
- */
 const STUB_UNDO_REDO: UndoRedoManagerLike = {
   execute() {
     throw new Error(

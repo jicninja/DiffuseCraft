@@ -102,6 +102,19 @@ export interface CanvasViewProps {
    * for that frame, matching the per-layer `<Image>` chain's behaviour.
    */
   activeStrokeImage?: SharedValue<SkImage | null>;
+  /**
+   * Optional per-layer opacity SharedValue resolver. When provided, the
+   * `<Group opacity={…}>` wrapper around each layer's image binds to the
+   * returned SharedValue instead of reading the static `Layer.opacity`
+   * snapshot from the document. RN-Skia subscribes via JSI, so opacity
+   * changes repaint on the next vsync without waiting for the host app
+   * to commit a new document through React.
+   *
+   * Callers that don't need real-time opacity (e.g., a renderer that
+   * only displays a frozen document) can omit this prop; the default
+   * path falls back to `layer.opacity`.
+   */
+  getLayerOpacity?: (layerId: string) => SharedValue<number>;
 }
 
 /**
@@ -136,6 +149,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
   className,
   onAdapterReady,
   activeStrokeImage,
+  getLayerOpacity,
 }) => {
   // Adapter must be a single, stable instance for the entire lifetime of
   // this component. `useMemo` is not a semantic guarantee in React 18 — it
@@ -271,16 +285,34 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
                 arm and reports the missing fields). At runtime RN-Skia
                 detects the `.value` property via JSI and subscribes
                 correctly; the cast is a static-only escape hatch. */}
-            {layers.map((layer) => (
-              <Image
-                key={layer.id}
-                image={adapter.layerSurfaces.imageFor(layer.id) as unknown as SkImage}
-                x={0}
-                y={0}
-                width={docWidth}
-                height={docHeight}
-              />
-            ))}
+            {layers.map((layer) => {
+              // Per-layer opacity — `Layer.opacity` is a 0..1 multiplier
+              // applied to every pixel before this layer composites over
+              // the layers beneath it. We wrap the `<Image>` in a `<Group
+              // opacity={...}>` because RN-Skia 2.6's `ImageProps` type
+              // does not expose `opacity`, while `<Group>` does and
+              // applies it uniformly to its descendants.
+              //
+              // When `getLayerOpacity` is provided, the prop binds to a
+              // `SharedValue<number>` and RN-Skia subscribes via JSI —
+              // slider drags repaint on the next vsync without waiting
+              // for React to commit a new document state. Otherwise we
+              // fall back to the static `layer.opacity` from the doc.
+              const opacityProp = getLayerOpacity
+                ? (getLayerOpacity(layer.id) as unknown as number)
+                : layer.opacity;
+              return (
+                <Group key={layer.id} opacity={opacityProp}>
+                  <Image
+                    image={adapter.layerSurfaces.imageFor(layer.id) as unknown as SkImage}
+                    x={0}
+                    y={0}
+                    width={docWidth}
+                    height={docHeight}
+                  />
+                </Group>
+              );
+            })}
 
             {/* In-progress active stroke. Mounted whenever the producer
                 (useBrushPipeline) provides the SharedValue. The SharedValue

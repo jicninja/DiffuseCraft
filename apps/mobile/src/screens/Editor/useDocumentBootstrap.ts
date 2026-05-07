@@ -16,7 +16,7 @@
  * Requirements: FR-2, FR-43, FR-44, FR-45.
  */
 
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect } from 'react';
 import {
   createDocument,
   addLayer,
@@ -24,13 +24,19 @@ import {
 } from '@diffusecraft/canvas-core';
 import { EditorStoreContext, useEditorStore } from '@diffusecraft/core';
 
+import { useEditorDocument } from './EditorDocumentContext';
+
 export function useDocumentBootstrap(documentId: string): Document | null {
-  const [doc, setDoc] = useState<Document | null>(null);
+  // The canvas-core `Document` lives in `EditorDocumentContext` so that
+  // every layer mutation (add/remove/reorder/visibility/opacity) flows
+  // through one source of truth — see EditorDocumentContext.tsx for the
+  // motivation. The bootstrap hook is the document's first writer; from
+  // mount onward, the layers panel takes over via the same context.
+  const { document: doc, setDocument: setEditorDocument } = useEditorDocument();
 
   // Store actions — stable references from Zustand selectors.
   const loadDocument = useEditorStore((s) => s.loadDocument);
   const setDocument = useEditorStore((s) => s.setDocument);
-  const setLayers = useEditorStore((s) => s.setLayers);
   const setActiveLayer = useEditorStore((s) => s.setActiveLayer);
 
   // Raw store handle for imperative getState() after loadDocument resolves.
@@ -79,21 +85,11 @@ export function useDocumentBootstrap(documentId: string): Document | null {
         last_applied_result_uri: null,
       });
 
-      // Layer snapshots — only metadata fields the store tracks.
-      setLayers(
-        withLayer.layers.map((l) => ({
-          id: l.id,
-          name: l.name,
-          visible: l.visible,
-          locked: l.locked,
-          opacity: l.opacity,
-        })),
-      );
-
+      // Step 6: hand the full Document to the editor-document context.
+      // The provider derives the store's layer snapshot from the document
+      // and is the single writer from this point onward.
+      setEditorDocument(withLayer);
       setActiveLayer(layer.id);
-
-      // Step 6: expose the full Document for CanvasView.
-      setDoc(withLayer);
     }
 
     void boot();
@@ -101,7 +97,14 @@ export function useDocumentBootstrap(documentId: string): Document | null {
     return () => {
       cancelled = true;
     };
-  }, [documentId, loadDocument, setDocument, setLayers, setActiveLayer, editorStore]);
+  }, [
+    documentId,
+    loadDocument,
+    setDocument,
+    setActiveLayer,
+    setEditorDocument,
+    editorStore,
+  ]);
 
   return doc;
 }

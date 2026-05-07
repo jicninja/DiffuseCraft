@@ -9,8 +9,8 @@
  * Subcommands:
  *   - (default)     Start the server. On first run prints bootstrap admin
  *                   token + pairing window status. With `--no-qr` skips
- *                   any terminal QR rendering (placeholder; renderer is
- *                   a peer dep, currently absent).
+ *                   the terminal QR rendering (the base64url payload is
+ *                   still logged so the device can be paired manually).
  *   - `pair`        Start the server (or attach to a running one in the
  *                   future) and immediately open a fresh QR + numeric-code
  *                   pairing window, printing the payloads.
@@ -22,6 +22,41 @@ import {
   type ServerConfig,
   ConfigValidationError,
 } from '@diffusecraft/server';
+
+interface QrTerminalModule {
+  generate(input: string, opts: { small?: boolean }, cb: (output: string) => void): void;
+}
+
+async function loadQrRenderer(): Promise<QrTerminalModule | null> {
+  try {
+    // qrcode-terminal ships no .d.ts file; the import is typed dynamically.
+    const mod = (await import(/* @vite-ignore */ 'qrcode-terminal' as string)) as
+      | QrTerminalModule
+      | { default: QrTerminalModule };
+    return 'generate' in mod ? (mod as QrTerminalModule) : (mod as { default: QrTerminalModule }).default;
+  } catch {
+    return null;
+  }
+}
+
+async function renderQr(payload: string): Promise<void> {
+  const qr = await loadQrRenderer();
+  if (!qr) {
+    // eslint-disable-next-line no-console
+    console.log(
+      '[diffusecraft] qrcode-terminal not installed; skipping ASCII QR render. ' +
+        'Pass --no-qr to silence this notice or install the peer dep.',
+    );
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    qr.generate(payload, { small: true }, (out) => {
+      // eslint-disable-next-line no-console
+      console.log(out);
+      resolve();
+    });
+  });
+}
 
 interface CliOptions {
   values: Record<string, unknown>;
@@ -143,9 +178,12 @@ async function main(): Promise<void> {
     // Open a fresh QR + code window for power-user pairing (H.3).
     const qr = server.pairing.openWindow({ mode: 'qr' });
     const code = server.pairing.openWindow({ mode: 'code' });
-    if (!noQr && qr.qr_payload) {
+    if (qr.qr_payload) {
       // eslint-disable-next-line no-console
       console.log(`[diffusecraft] QR payload (base64url JSON): ${qr.qr_payload}`);
+      if (!noQr) {
+        await renderQr(qr.qr_payload);
+      }
     }
     if (qr.manual_url) {
       // eslint-disable-next-line no-console

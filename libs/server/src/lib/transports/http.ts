@@ -1,66 +1,74 @@
 /**
  * Streamable HTTP transport (E.3, FR-15, FR-17).
  *
- * Fastify mounts `POST /mcp` for invocations and a long-lived event channel
- * for catalog events (job.progress, etc.). Bearer-token middleware
- * authenticates against the `tokens` table; missing/invalid token → 401
- * with `WWW-Authenticate: Bearer realm="DiffuseCraft"`.
+ * Fastify mounts the MCP Streamable HTTP endpoint at `POST/GET/DELETE
+ * /mcp` and an anonymous `POST /pair` route used by paired devices to
+ * claim a token. Bearer-token auth (`Authorization: Bearer dcft_...`)
+ * gates `/mcp`; missing/invalid tokens → 401 with
+ * `WWW-Authenticate: Bearer realm="DiffuseCraft"`.
  *
- * Skeletal completeness: this file mounts the Fastify server, attaches the
- * auth hook, and exposes `dispatchInvocation`. The MCP-over-HTTP framing
- * (Streamable HTTP per the spec) integrates via
- * `@modelcontextprotocol/sdk/server/streamableHttp` — that wiring lands
- * alongside the SDK upgrade.
- *
- * TODO(server-architecture): connect SDK Streamable HTTP transport into
- * the Fastify route; wire SSE event channel.
+ * MCP framing is delegated to the SDK's `StreamableHTTPServerTransport`.
+ * Each authenticated MCP session (`initialize` is the first request)
+ * gets its own `Server` + transport pair so sampling round-trips bind
+ * to the right peer. Subsequent requests carry the SDK's
+ * `mcp-session-id` header which we route to the existing session.
  */
 
-import fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
+import fastify, {
+  type FastifyInstance,
+  type FastifyRequest,
+  type FastifyReply,
+} from 'fastify';
 import type { Database as DB } from 'better-sqlite3';
 import type { Logger } from 'pino';
+import { randomUUID } from 'node:crypto';
+
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+
+import type { CatalogManifest } from '../catalog/types.js';
 import type { HandlerDispatcher } from '../dispatcher.js';
 import type { EventBus } from '../events/bus.js';
 import type { AuditLog } from '../audit/log.js';
 import type { PairingManager } from '../pairing/manager.js';
 import { PairingError } from '../pairing/errors.js';
 import { verifyToken } from '../pairing/verify.js';
-import type { HandlerContext, UndoRedoManagerLike } from '../../types/handler-context.js';
-import { newRequestId } from '../id.js';
+import type { UndoRedoManagerLike } from '../../types/handler-context.js';
 import type { ConnectionTracker } from './connection-tracker.js';
+import type { InMemoryTransport } from './in-memory.js';
+import { createMcpServerInstance } from '../mcp/server-factory.js';
+import type { InMemorySamplingRegistry } from '../sampling/registry.js';
 
 export interface HttpTransportOptions {
   host: string;
   port: number;
-  /** Max inbound body size in bytes; mirror `comfyui_proxy.rate_limits.max_payload_bytes`. */
   body_limit_bytes: number;
-  /** Pairing manager exposed via the anonymous `POST /pair` route. */
   pairing?: PairingManager;
-  /**
-   * Per-token connection tracker (undo-redo-system A.5). When supplied,
-   * each authenticated `POST /mcp` invocation brackets the dispatch with
-   * `tracker.acquire(token_id)` / `tracker.release(token_id)` so the
-   * {@link UndoRedoManager}'s disconnect-grace timer arms (or re-arms)
-   * around bursts of activity from a token. Anonymous routes
-   * (`/health`, `/pair`) carry no token id and bypass the tracker.
-   */
   connectionTracker?: ConnectionTracker;
-  /**
-   * Undo/redo manager facade — stamped onto every handler ctx so
-   * reversible handlers can call `ctx.undoRedo.execute(...)`
-   * (undo-redo-system FR-34). Optional only because some test
-   * harnesses construct the HTTP transport without the full server
-   * bootstrap.
-   */
   undoRedo?: UndoRedoManagerLike;
+  /** Catalog used by the MCP server (tools/resources/prompts manifest). */
+  catalog: CatalogManifest;
+  /** Resource registry — typically the in-memory transport. */
+  resources: Pick<InMemoryTransport, 'readResource'>;
+  /** Sampling registry; HTTP sessions register sampling-capable peers here. */
+  samplingRegistry?: InMemorySamplingRegistry;
+  /** Server identity surfaced in `initialize` responses. */
+  serverInfo: { name: string; version: string };
 }
 
-/** Routes that the bearer-token preHandler must not reject. */
 const ANONYMOUS_ROUTES = new Set(['/health', '/pair']);
+
+interface McpSession {
+  readonly transport: StreamableHTTPServerTransport;
+  readonly token_id: string;
+  readonly token_name: string;
+  unregisterSampling: (() => void) | null;
+}
 
 export class HttpTransport {
   private app?: FastifyInstance;
   private boundUrl?: string;
+  private readonly sessions = new Map<string, McpSession>();
 
   constructor(
     private readonly db: DB,
@@ -73,70 +81,75 @@ export class HttpTransport {
 
   async start(): Promise<{ url: string }> {
     const app = fastify({ bodyLimit: this.options.body_limit_bytes });
-
     app.addHook('preHandler', async (req, reply) => this.authenticate(req, reply));
 
-    app.post('/mcp', async (req, reply) => {
-      const body = (req.body as { name?: string; args?: unknown }) ?? {};
-      if (typeof body.name !== 'string') {
-        return reply.code(400).send({ error: 'INVALID_REQUEST', message: 'missing tool name' });
-      }
-      const tokenId = (req.headers['x-token-id'] as string | undefined) ?? null;
+    const handleMcp = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+      const tokenId = (req.headers['x-token-id'] as string | undefined) ?? '';
       const tokenName = (req.headers['x-token-name'] as string | undefined) ?? '<unknown>';
-      const ctx: HandlerContext = {
-        request_id: newRequestId(),
-        transport: 'http',
-        token_id: tokenId,
-        token_name: tokenName,
-        received_at: Date.now(),
-        publish: (event) => this.bus.publish(event),
-        audit: ({ operation, outcome, latency_ms, args_summary }) =>
-          void this.audit.append({
-            token_id: tokenId,
-            token_name: tokenName,
-            operation,
-            outcome,
-            latency_ms,
-            args_summary,
-          }),
-        logger: {
-          info: (...rest) => this.logger.info(...rest),
-          error: (...rest) => this.logger.error(...rest),
-        },
-        undoRedo: this.options.undoRedo ?? STUB_UNDO_REDO,
-      };
-      // undo-redo-system A.5: bracket the dispatch with acquire/release so
-      // the per-token grace timer cancels (acquire) and re-arms (release)
-      // around each authenticated request. The tracker is `null`-safe so
-      // callers without a `tokenId` (defensive: should not happen on
-      // `/mcp` after the bearer preHandler) are silently skipped.
+      const sessionHeader = (req.headers['mcp-session-id'] as string | undefined) ?? null;
+      const body = (req as unknown as { body: unknown }).body;
+
+      let session = sessionHeader ? this.sessions.get(sessionHeader) ?? null : null;
+
+      if (!session) {
+        // New session must start with `initialize`.
+        if (!isInitializeRequest(body)) {
+          reply.code(400).send({
+            jsonrpc: '2.0',
+            error: { code: -32000, message: 'no MCP session; first request must be `initialize`' },
+            id: null,
+          });
+          return;
+        }
+        session = this.openSession(tokenId, tokenName);
+      }
+
       this.options.connectionTracker?.acquire(tokenId);
       try {
-        const out = await this.dispatcher.dispatch(body.name, body.args, ctx);
-        return reply.send({ ok: true, result: out });
+        // Pass the parsed body so the SDK doesn't try to re-parse the stream.
+        // Fastify exposes the raw Node request/response on `.raw` and we
+        // need `reply.hijack()` to tell Fastify the SDK owns the response
+        // pipe from here on; the type defs surface these as untyped slots
+        // in some setups so we narrow at the call site.
+        const fr = req as unknown as { raw: import('node:http').IncomingMessage };
+        const fp = reply as unknown as {
+          raw: import('node:http').ServerResponse;
+          hijack: () => void;
+          sent: boolean;
+          code: (n: number) => unknown;
+          send: (b: unknown) => unknown;
+        };
+        await session.transport.handleRequest(fr.raw, fp.raw, body);
+        fp.hijack();
       } catch (err) {
-        const code = (err as { code?: string }).code ?? 'INTERNAL_ERROR';
-        const status = code === 'UNAUTHORIZED' ? 401 : code === 'PAYLOAD_TOO_LARGE' ? 413 : 500;
-        return reply.code(status).send({ ok: false, error: { code, message: (err as Error).message } });
+        this.logger.error({ err }, 'MCP request handling failed');
+        const fp = reply as unknown as { sent: boolean; code: (n: number) => { send: (b: unknown) => unknown } };
+        if (!fp.sent) fp.code(500).send({ ok: false, error: { code: 'INTERNAL_ERROR', message: (err as Error).message } });
       } finally {
         this.options.connectionTracker?.release(tokenId);
       }
-    });
+    };
+
+    app.post('/mcp', handleMcp);
+    app.get('/mcp', handleMcp);
+    (app as unknown as { delete: typeof app.post }).delete('/mcp', handleMcp);
 
     app.get('/health', async (_req, reply) => reply.send({ ok: true }));
-
-    // Anonymous pairing endpoint (FR-8…FR-11, design.md §2.2). Returns 4xx
-    // with a typed `code` body for every documented failure mode.
     app.post('/pair', async (req, reply) => this.handlePair(req, reply));
 
     const url = await app.listen({ host: this.options.host, port: this.options.port });
     this.app = app;
     this.boundUrl = url;
-    this.logger.info({ url }, 'HTTP transport listening');
+    this.logger.info({ url }, 'HTTP transport listening (MCP Streamable HTTP wired)');
     return { url };
   }
 
   async stop(): Promise<void> {
+    for (const session of this.sessions.values()) {
+      session.unregisterSampling?.();
+      await session.transport.close().catch(() => undefined);
+    }
+    this.sessions.clear();
     if (!this.app) return;
     await this.app.close();
     this.app = undefined;
@@ -149,13 +162,63 @@ export class HttpTransport {
 
   // ---------------------------------------------------------------------------
 
-  /** Bearer-token auth (FR-17). Stamps headers `x-token-id`/`x-token-name` for the route. */
+  private openSession(tokenId: string, tokenName: string): McpSession {
+    const undoRedo = this.options.undoRedo ?? STUB_UNDO_REDO;
+    let session: McpSession | null = null;
+
+    const instance = createMcpServerInstance({
+      catalog: this.options.catalog,
+      dispatcher: this.dispatcher,
+      resources: this.options.resources,
+      bus: this.bus,
+      audit: this.audit,
+      logger: this.logger,
+      serverInfo: this.options.serverInfo,
+      undoRedo,
+      identity: {
+        token_id: tokenId,
+        token_name: tokenName,
+        transport: 'http',
+      },
+      onInitialized: ({ clientCapabilities }) => {
+        const samplingClient = instance.buildSamplingClient(clientCapabilities);
+        if (samplingClient && this.options.samplingRegistry && session) {
+          session.unregisterSampling = this.options.samplingRegistry.add(samplingClient);
+          this.logger.info(
+            { agent: tokenName },
+            'HTTP MCP client registered as sampling target',
+          );
+        }
+      },
+    });
+
+    const sdkTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sid) => {
+        if (session) this.sessions.set(sid, session);
+      },
+    });
+
+    sdkTransport.onclose = () => {
+      const sid = sdkTransport.sessionId;
+      if (sid) {
+        const s = this.sessions.get(sid);
+        s?.unregisterSampling?.();
+        this.sessions.delete(sid);
+      }
+    };
+
+    void instance.server.connect(sdkTransport);
+
+    session = { transport: sdkTransport, token_id: tokenId, token_name: tokenName, unregisterSampling: null };
+    return session;
+  }
+
+  /** Bearer-token auth (FR-17). Stamps `x-token-id`/`x-token-name` headers. */
   private async authenticate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    // Anonymous routes (health, pairing) bypass bearer auth.
     const url = (req as unknown as { url: string }).url ?? '';
     const path = url.split('?')[0] ?? url;
     if (ANONYMOUS_ROUTES.has(path)) return;
-
     const auth = (req.headers['authorization'] as string | undefined) ?? '';
     const match = /^Bearer\s+(.+)$/i.exec(auth);
     if (!match) return this.unauthorized(reply);
@@ -172,11 +235,6 @@ export class HttpTransport {
     reply.send({ ok: false, error: { code: 'UNAUTHORIZED', message: 'pairing token required' } });
   }
 
-  /**
-   * Handle `POST /pair` (anonymous, design.md §2.2). Decoupled from the
-   * dispatcher; success returns 200 with the candidate's token, failure
-   * returns the documented HTTP status + error code body.
-   */
   private async handlePair(req: FastifyRequest, reply: FastifyReply): Promise<unknown> {
     if (!this.options.pairing) {
       return reply
@@ -216,13 +274,6 @@ export class HttpTransport {
   }
 }
 
-/**
- * Defensive stub used when the HTTP transport is constructed without a
- * real {@link UndoRedoManagerLike}. Calling `execute` throws synchronously
- * so misconfiguration surfaces immediately; non-reversible handlers
- * keep working in stripped-down test harnesses since they never reach
- * for `ctx.undoRedo`.
- */
 const STUB_UNDO_REDO: UndoRedoManagerLike = {
   execute() {
     throw new Error(

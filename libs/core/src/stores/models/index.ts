@@ -80,16 +80,28 @@ export function createModelsStore(options: ModelsStoreOptions = {}): ModelsStore
     },
 
     refresh: async () => {
-      // TODO(client-sdk): replace with parallel calls
-      //   await client.invokeTool('list_models', {});
-      //   await client.invokeTool('list_presets', {});
-      // For now, leave existing cache and bump lastRefresh so consumers can
-      // observe the action ran.
       if (!attached) {
+        // No client yet (cold start before pairing); bump the timestamp
+        // so consumers can observe that a refresh was attempted.
         set({ lastRefresh: new Date().toISOString() });
         return;
       }
-      set({ lastRefresh: new Date().toISOString() });
+      // Fetch both lists in parallel. Each `diffusecraft://*/list`
+      // resource returns `{ items: T[], next_cursor?: string }` per the
+      // catalog manifest (libs/mcp-tools/src/resources/manifest.ts).
+      const [modelsPage, presetsPage] = await Promise.all([
+        attached.readResource<{ items: Model[]; next_cursor?: string }>(
+          'diffusecraft://models/list',
+        ),
+        attached.readResource<{ items: Preset[]; next_cursor?: string }>(
+          'diffusecraft://presets/list',
+        ),
+      ]);
+      set({
+        models: modelsPage?.items ?? [],
+        presets: presetsPage?.items ?? [],
+        lastRefresh: new Date().toISOString(),
+      });
     },
 
     applyDownloadProgress: (payload) => {

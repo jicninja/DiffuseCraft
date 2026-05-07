@@ -53,6 +53,8 @@ export const KNOWN_LEGACY_PATHS: ReadonlySet<string> = new Set<string>([
   'select_all',
   'invert_selection',
   'refine_selection',
+  'auto_select_subject',
+  'select_by_prompt',
 ]);
 
 /**

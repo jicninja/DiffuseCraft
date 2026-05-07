@@ -122,6 +122,8 @@ export const EDITOR_STRINGS = {
     kindBadgeControl: 'Control',
     kindBadgeReference: 'Reference',
     emptyTitle: 'No layers yet',
+    deleteLayer: 'Delete',
+    deleteLayerA11yLabel: 'Delete layer',
   },
 
   // History sub-tab
@@ -180,6 +182,17 @@ export const EDITOR_STRINGS = {
     micA11yLabel: 'Dictate message',
     sendA11yLabel: 'Send message',
     sendButton: 'Send',
+
+    // Connection / state
+    settingsA11yLabel: 'Chat settings',
+    noClientHostFallback: 'No server',
+    noAgentName: 'No agent paired',
+    defaultAgentName: 'AI agent',
+    thinkingLabel: 'Thinking…',
+    emptyTitleConnected: 'Start a conversation with your AI agent.',
+    emptyTitleDisconnected: 'Pair a server with an AI agent to chat.',
+    connectFirstWarn: 'Connect to a server to chat.',
+    sendFailedPrefix: 'Chat failed',
   },
 
   // Live workspace card (rendered inside RightPanel when workspace === 'Live')

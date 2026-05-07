@@ -185,6 +185,15 @@ export interface DiffuseCraftClient {
     args: TArgs,
   ): Promise<TResult>;
 
+  /**
+   * Read a `diffusecraft://` resource URI by dynamic name. Wire shape is
+   * normalised so callers receive the underlying resource payload
+   * directly (no `{ contents: [{ text }] }` wrapper). Useful when the
+   * caller speaks raw URIs (the `@diffusecraft/core` store provider
+   * does); typed namespace helpers live on {@link resources}.
+   */
+  readResource<TResult = unknown>(uri: string): Promise<TResult>;
+
   /** Typed resource readers, one namespace per catalog resource (FR-16+, design §3 / §6). */
   resources: TypedResourceReaders;
 
@@ -651,6 +660,19 @@ class DiffuseCraftClientImpl implements DiffuseCraftClient {
       name as ToolName,
       args as ToolInput<ToolName>,
     );
+  }
+
+  /**
+   * Read a `diffusecraft://` resource URI. Normalises the MCP wire shape
+   * (`{ contents: [{ text }] }`) so callers receive the underlying
+   * resource payload directly. The in-memory transport short-circuits
+   * this normalisation step.
+   */
+  async readResource<TResult = unknown>(uri: string): Promise<TResult> {
+    this.assertNotDisposed("readResource");
+    const raw = await this.transport.readResource(uri as never);
+    const payload = extractResourcePayload(raw);
+    return payload as TResult;
   }
 
   // -------------------------------------------------------------------
