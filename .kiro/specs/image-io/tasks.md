@@ -38,7 +38,7 @@
 
 - [ ] 2. Platform-adapted picker / sharer (`ImageIoAdapter`)
 
-- [ ] 2.1 (P) Native (Expo) implementation of the picker/sharer adapter
+- [x] 2.1 (P) Native (Expo) implementation of the picker/sharer adapter
   - Implement `pickImageFile()` using `expo-image-picker` with explicit MIME filter for PNG / JPEG / WebP
   - Implement `pickProjectFile()` using `expo-document-picker` with `type: ['application/x-dcft', 'application/zip']` and an explicit `.dcft` filename filter
   - Implement `deliverFile()` by writing bytes to a `expo-file-system.cacheDirectory` temp path then opening `expo-sharing.shareAsync(uri)`; clean up the temp file on completion or cancellation

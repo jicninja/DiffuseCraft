@@ -28,6 +28,9 @@ export type { SelectionOverlayProps } from './overlay/SelectionOverlay';
 export { CanvasView } from './CanvasView';
 export type { CanvasViewProps } from './CanvasView';
 
+// ---- Image I/O platform adapter (image-io spec) ----
+export * from './io/adapter';
+
 // ---- Brush rendering pipeline ----
 
 // Stamp renderer (per-stroke PictureRecorder + Paint/Shader pool).
