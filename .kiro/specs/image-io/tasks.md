@@ -80,7 +80,7 @@
   - _Boundary: libs/server/src/lib/dcft_
   - _Requirements: 3.2, 3.10_
 
-- [ ] 4.2 (P) `DcftMaterializer`: archive bytes → new document rows
+- [x] 4.2 (P) `DcftMaterializer`: archive bytes → new document rows
   - Reject archives larger than `DCFT_MAX_BYTES` before opening the archive
   - Unzip with `fflate.unzip`; parse `manifest.json` against `DcftManifestSchema` and reject unknown versions deterministically
   - Parse `document.json` against `DcftDocumentJsonSchema`; recompute SHA-256 of the canonical JSON and reject on mismatch
