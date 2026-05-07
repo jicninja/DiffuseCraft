@@ -1,20 +1,12 @@
 // Thin re-export bridge to the real connection store from @diffusecraft/core.
 //
-// The original stub file owned its own Zustand state and a debug cycle. The
-// `client-state-architecture` spec moved that state into
-// `createConnectionStore()` in @diffusecraft/core. This file preserves the
-// public shape (`useConnectionStoreStub`, `describeConnectionState`,
-// `__debugSetStatus`, `__debugCycle`) so `app/index.tsx` and
-// `screens/Settings/About.tsx` keep working without changes.
+// The legacy stub used to own its own Zustand state. It now shares the
+// SAME zustand instance that `<StoresProvider>` mounts in `app/_layout.tsx`,
+// so the router (`app/index.tsx`), Settings, the Debug deep link, and
+// `useDiffuseCraftClient` all read and write a single source of truth.
 //
-// The hook returned here mirrors zustand v4's `UseBoundStore` shape: it is
-// callable as a hook with an optional selector AND exposes `.getState()` /
-// `.setState()` / `.subscribe()` / `.destroy()`. We achieve that by
-// attaching the StoreApi methods to the wrapper function.
-//
-// TODO(deletion-after-spec-implementation): once apps/mobile migrates to the
-// `StoresProvider` + `useConnectionStore` hook from @diffusecraft/core, delete
-// this file and update the import sites.
+// The exported `connectionStoreSingleton` is what `_layout.tsx` passes
+// in `preinstantiated.connection` — that is what unifies both contexts.
 
 import { useStore } from 'zustand';
 
@@ -25,20 +17,11 @@ import {
   type PairedServerSummary,
 } from '@diffusecraft/core';
 
-// One module-level instance — preserves the stub's "shared singleton" feel for
-// the app router and Settings.About debug card. The real provider-based wiring
-// is added in the apps-mobile integration step (out of scope for this spec).
+// Single module-level instance shared with `<StoresProvider>`.
 const store = createConnectionStore();
 
-// DEV ONLY: pre-seed a connected mock so the cold-start flow lands directly in
-// /documents and we can drive into Editor without paging through the pairing
-// flow. Remove once `pairing-protocol` integration ships in apps/mobile.
-if (__DEV__) {
-  store.getState().__debugSetServers([
-    { id: 'srv-studio-imac', name: 'studio-iMac' },
-  ]);
-  store.getState().__debugSetStatus('connected');
-}
+/** The shared connection store. Pass to `<StoresProvider preinstantiated.connection>`. */
+export const connectionStoreSingleton = store;
 
 /** Status vocabulary expected by the existing chrome. */
 export type ConnectionStatus =

@@ -1,15 +1,11 @@
 // Root index route (`/`). Conditional-routing logic that used to live in
-// src/navigation/RootRouter.tsx. Subscribes to the connectionStore stub and
-// emits a <Redirect> to the appropriate top-level route:
+// src/navigation/RootRouter.tsx. Subscribes to the shared connection store
+// and emits a <Redirect> to the appropriate top-level route:
 //
 //   status='unknown'                                         → render Splash
 //   status='no-paired'                                       → /pair
 //   status='paired-no-active' (>1 paired)                    → /servers
 //   status='paired-no-active' (1 paired) | 'connected'       → /documents
-//
-// When the real connectionStore from client-state-architecture lands, swap the
-// import below; the redirect chain stays identical because the runtime contract
-// (status / pairedServers / activeServerId) is preserved.
 
 import { Redirect } from 'expo-router';
 
@@ -20,13 +16,6 @@ export default function Index() {
   const status = useConnectionStoreStub((s) => s.status);
   const pairedCount = useConnectionStoreStub((s) => s.pairedServers.length);
   const activeServerId = useConnectionStoreStub((s) => s.activeServerId);
-
-  // DEV shortcut: when connected, land directly in the Editor so we can drive
-  // the drawing tool without paging through Documents. Remove once the real
-  // pairing/document flow is wired (per pairing-protocol + client-sdk).
-  if (__DEV__ && status === 'connected') {
-    return <Redirect href="/editor/dev-doc?workspace=generate" />;
-  }
 
   if (status === 'unknown') {
     // Cold-start: render Splash until the store dispatches a real status.

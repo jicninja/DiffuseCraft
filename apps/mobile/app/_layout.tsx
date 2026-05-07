@@ -45,7 +45,6 @@ import { Slot } from 'expo-router';
 import { PortalHost } from '@rn-primitives/portal';
 
 import {
-  createConnectionStore,
   createEditorStore,
   createHistoryStore,
   createJobsStore,
@@ -58,6 +57,7 @@ import {
 import { ThemeProvider, ToastProvider, toast } from '@diffusecraft/ui';
 
 import { useDiffuseCraftClient } from '../src/sdk/useDiffuseCraftClient';
+import { connectionStoreSingleton } from '../src/state/connectionStore.stub';
 
 // Wire the undo/redo toast adapter once at app boot so `useUndoRedo`
 // (libs/core) can surface the 1.5 s confirmation banner without core
@@ -102,7 +102,12 @@ export default function RootLayout() {
   const stores = useMemo<PreinstantiatedStores>(
     () => ({
       editor: createEditorStore(),
-      connection: createConnectionStore(),
+      // Reuse the singleton from connectionStore.stub so the router
+      // (app/index.tsx) and Settings observe the SAME state that
+      // useDiffuseCraftClient + StoresProvider write to. Without this,
+      // Manual pairing writes here while the router keeps reading a
+      // separate stub instance and never advances past /pair.
+      connection: connectionStoreSingleton,
       models: createModelsStore(),
       jobs: createJobsStore(),
       history: createHistoryStore(),
