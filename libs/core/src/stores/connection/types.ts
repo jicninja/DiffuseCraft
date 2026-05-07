@@ -42,7 +42,7 @@ export interface PairedBackend {
   /** ISO timestamp of the most recent successful connection. */
   lastConnectedAt: string | null;
   /** Discovery origin of the pairing event. */
-  origin: 'mdns' | 'qr' | 'manual';
+  origin: 'mdns' | 'qr' | 'manual' | 'code';
   /** Base URL the SDK dials when re-connecting to this backend. */
   url: string;
 }
@@ -51,7 +51,7 @@ export interface PairedBackend {
 export interface NewPairedBackend {
   id: string;
   name: string;
-  origin: 'mdns' | 'qr' | 'manual';
+  origin: 'mdns' | 'qr' | 'manual' | 'code';
   /** Base URL the SDK will dial. Required so the backend is re-reachable. */
   url: string;
 }

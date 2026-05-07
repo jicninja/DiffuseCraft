@@ -1,35 +1,75 @@
-// Implements 02-Pairing-mDNS from design-snapshot v1.0.0
+// Pairing — mDNS (`02-Pairing-mDNS`).
 //
-// Default entry of the PairingFlow. Renders discovered servers from the
-// MOCK_MDNS_DISCOVERED fixture as tappable Cards, plus a fixed row of
-// alternative pairing actions (QR / Code / Manual) and a footer install
-// hint. Real mDNS scan + pairing handshake land in pairing-protocol.
+// Default entry of the PairingFlow. Scans for `_diffusecraft._tcp.local`
+// on the LAN via `react-native-zeroconf` and renders each resolved
+// service as a tappable Card. Tapping a server POSTs `/pair` with
+// `method: 'mdns'`; the server's host hook approves (or denies), then
+// the result is persisted via the connection store and the user is
+// routed back to the editor.
 
 import { useRouter } from 'expo-router';
 import { ChevronRight, HelpCircle, Wifi } from 'lucide-react-native';
+import { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
+import { useConnectionStore, type DiscoveredBackend } from '@diffusecraft/core';
+import { PairingClient } from '@diffusecraft/diffusion-client';
 import {
   Avatar,
   AvatarFallback,
   Button,
   Card,
   Separator,
+  toast,
   tokens,
 } from '@diffusecraft/ui';
 
-import { MOCK_MDNS_DISCOVERED } from '../_mock/servers';
+import { completePairing, getDeviceName } from '../../sdk/pairing-flow';
+import { useMdnsScan } from '../../sdk/zeroconf-mdns';
 import { PAIRING_MDNS_STRINGS as S } from '../_strings/PairingMDNS';
 
 export function PairingMDNSScreen() {
   const router = useRouter();
+  const pairBackend = useConnectionStore((s) => s.pairBackend);
+  const setCurrentBackend = useConnectionStore((s) => s.setCurrentBackend);
+  const pairedBackends = useConnectionStore((s) => s.pairedBackends);
+  const discoveredBackends = useConnectionStore((s) => s.discoveredBackends);
+  const { available: mdnsAvailable } = useMdnsScan();
 
-  const onTapServer = () => {
-    console.log('TODO(pairing-protocol)');
+  const [pairing, setPairing] = useState<string | null>(null);
+
+  const onTapServer = async (backend: DiscoveredBackend) => {
+    if (pairing) return;
+    setPairing(backend.id);
+    try {
+      const url = `http://${backend.host}:${backend.port}`;
+      const candidateName = await getDeviceName();
+      const result = await new PairingClient({}).requestPair(
+        { url },
+        { method: 'mdns', candidate_name: candidateName },
+      );
+      await completePairing(
+        { pairBackend, setCurrentBackend },
+        'mdns',
+        { url, token: result.token, serverName: result.server_name },
+      );
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Pairing failed');
+    } finally {
+      setPairing(null);
+    }
   };
 
   const onHelp = () => {
-    console.log('TODO(help-overlay)');
+    toast.info('Help is coming soon.');
+  };
+
+  // The store records paired backends by id; mDNS yields a different id
+  // (`<service>.<port>`), so we match on `host:port` substring of the
+  // paired entry's `url` to surface the "Paired" badge.
+  const isPaired = (backend: DiscoveredBackend): boolean => {
+    const target = `${backend.host}:${backend.port}`;
+    return pairedBackends.some((p) => p.url.includes(target));
   };
 
   return (
@@ -38,7 +78,6 @@ export function PairingMDNSScreen() {
         className="flex-1"
         contentContainerClassName="px-6 pt-10 pb-10"
       >
-        {/* Header */}
         <View className="flex-row items-start justify-between">
           <View className="flex-1 pr-4">
             <Text className="text-text-primary text-display-md">
@@ -58,7 +97,7 @@ export function PairingMDNSScreen() {
           </Pressable>
         </View>
 
-        {/* Discovered servers section */}
+        {/* Discovered servers */}
         <View className="mt-8">
           <View className="flex-row items-center gap-2">
             <Wifi size={14} color={tokens.colors.text.secondary} />
@@ -68,12 +107,15 @@ export function PairingMDNSScreen() {
           </View>
 
           <View className="mt-4 gap-3">
-            {MOCK_MDNS_DISCOVERED.map((srv) => {
+            {discoveredBackends.map((srv) => {
               const initial = srv.name.charAt(0).toUpperCase();
+              const paired = isPaired(srv);
+              const isPairing = pairing === srv.id;
               return (
                 <Pressable
                   key={srv.id}
-                  onPress={onTapServer}
+                  onPress={() => onTapServer(srv)}
+                  disabled={pairing !== null}
                   accessibilityRole="button"
                   accessibilityLabel={`${S.tapToPair}: ${srv.name}`}
                 >
@@ -90,14 +132,19 @@ export function PairingMDNSScreen() {
                         <Text className="text-text-primary text-body-strong">
                           {srv.name}
                         </Text>
-                        {srv.paired ? (
+                        {paired ? (
                           <Text className="text-accent-default text-caption">
                             {S.pairedBadge}
                           </Text>
                         ) : null}
+                        {isPairing ? (
+                          <Text className="text-text-secondary text-caption">
+                            Pairing…
+                          </Text>
+                        ) : null}
                       </View>
                       <Text className="text-text-tertiary text-mono mt-1">
-                        {srv.ip}:{srv.port}
+                        {srv.host}:{srv.port}
                       </Text>
                     </View>
                     <ChevronRight size={18} color={tokens.colors.text.tertiary} />
@@ -108,17 +155,24 @@ export function PairingMDNSScreen() {
           </View>
         </View>
 
-        {/* Empty-state hint title (always visible per brief) */}
-        <View className="mt-10 items-center">
-          <View className="h-24 w-24 items-center justify-center rounded-xl border border-border-subtle bg-surface">
-            <Wifi size={28} color={tokens.colors.text.tertiary} />
+        {/* Empty state */}
+        {discoveredBackends.length === 0 ? (
+          <View className="mt-10 items-center">
+            <View className="h-24 w-24 items-center justify-center rounded-xl border border-border-subtle bg-surface">
+              <Wifi size={28} color={tokens.colors.text.tertiary} />
+            </View>
+            <Text className="text-text-primary text-body-strong mt-4">
+              {S.emptyTitle}
+            </Text>
+            {!mdnsAvailable ? (
+              <Text className="text-text-tertiary text-caption mt-2 text-center">
+                Discovery unavailable on this build. Use QR or Manual.
+              </Text>
+            ) : null}
           </View>
-          <Text className="text-text-primary text-body-strong mt-4">
-            {S.emptyTitle}
-          </Text>
-        </View>
+        ) : null}
 
-        {/* Alt action buttons (always visible) */}
+        {/* Alt action buttons */}
         <View className="mt-6 gap-3">
           <Button
             variant="secondary"
@@ -151,7 +205,6 @@ export function PairingMDNSScreen() {
 
         <Separator className="mt-10 bg-border-subtle" />
 
-        {/* Footer install hint */}
         <Text className="text-text-tertiary text-mono text-center mt-6">
           {S.footerHint}
         </Text>

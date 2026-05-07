@@ -8,6 +8,8 @@
 // The exported `connectionStoreSingleton` is what `_layout.tsx` passes
 // in `preinstantiated.connection` — that is what unifies both contexts.
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import { useStore } from 'zustand';
 
 import {
@@ -17,8 +19,21 @@ import {
   type PairedServerSummary,
 } from '@diffusecraft/core';
 
-// Single module-level instance shared with `<StoresProvider>`.
-const store = createConnectionStore();
+// Persist `pairedBackends` + `currentBackendId` via AsyncStorage; tokens
+// land in expo-secure-store (Keychain on iOS / Keystore on Android) so
+// they never appear in plain-text persistence (FR-9 / FR-18).
+//
+// `expo-secure-store`'s top-level methods already match the
+// `SecureTokenAdapter` shape (`setItemAsync` / `getItemAsync` /
+// `deleteItemAsync`), so we pass the namespace through directly.
+const store = createConnectionStore({
+  storage: AsyncStorage,
+  secureTokens: {
+    setItemAsync: SecureStore.setItemAsync,
+    getItemAsync: SecureStore.getItemAsync,
+    deleteItemAsync: SecureStore.deleteItemAsync,
+  },
+});
 
 /** The shared connection store. Pass to `<StoresProvider preinstantiated.connection>`. */
 export const connectionStoreSingleton = store;

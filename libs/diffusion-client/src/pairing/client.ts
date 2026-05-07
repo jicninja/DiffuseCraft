@@ -300,10 +300,22 @@ export class PairingClient {
     const candidateName = opts.candidate_name ?? "Unknown device";
     const method = opts.method ?? "mdns";
 
+    const requestBody: Record<string, unknown> = {
+      v: 1,
+      method,
+      candidate_name: candidateName,
+    };
+    // The server's `code` window matches against the supplied code; the
+    // QR / manual / mdns paths ignore it server-side, so we only include
+    // it when the consumer asked for the code method to keep payloads tight.
+    if (method === "code" && typeof opts.code === "string" && opts.code.length > 0) {
+      requestBody.code = opts.code;
+    }
+
     const requestInit: RequestInit = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ v: 1, method, candidate_name: candidateName }),
+      body: JSON.stringify(requestBody),
     };
     if (opts.signal) requestInit.signal = opts.signal;
 

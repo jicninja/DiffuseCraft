@@ -1,20 +1,23 @@
-// Implements 06a-Settings-Connection (snapshot preview missing — built from brief). v1.0.0
+// Settings — Connection (`06a-Settings-Connection`).
 //
-// Settings detail rendered at `/settings/connection`. Three sections:
-//   1. Paired servers — Cards listing MOCK_PAIRED_SERVERS, each with a
-//      MoreHorizontal DropdownMenu (Rename / Revoke / Audit log).
+// Three sections:
+//   1. Paired servers — Cards listing the live connection store's
+//      `pairedBackends`, each with a MoreHorizontal DropdownMenu
+//      (Rename / Revoke / Audit log).
 //   2. Pairing — single primary CTA "Pair a new server" → /pair.
-//   3. This device — editable device-name Input + read-only public-key
-//      fingerprint with Copy affordance.
+//   3. This device — editable device-name Input (persisted via
+//      pairing-flow.ts) + read-only fingerprint with Copy affordance.
 //
-// Real persistence + token revocation + clipboard wiring land in
-// pairing-protocol; this file only wires chrome.
+// Real persistence + token revocation + clipboard wiring live here now;
+// the only TODO left is the audit-log deep link.
 
 import { useRouter } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { ChevronLeft, Copy, MoreHorizontal, Wifi } from 'lucide-react-native';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
+import { useConnectionStore } from '@diffusecraft/core';
 import {
   Badge,
   Button,
@@ -26,14 +29,18 @@ import {
   Input,
   Label,
   Separator,
+  toast,
   tokens,
 } from '@diffusecraft/ui';
 
-import { MOCK_PAIRED_SERVERS } from '../_mock/servers';
+import {
+  getDeviceFingerprint,
+  getDeviceName,
+  setDeviceName as persistDeviceName,
+} from '../../sdk/pairing-flow';
 import { SETTINGS_CONNECTION_STRINGS as S } from '../_strings/SettingsConnection';
 
-// Static fingerprint shown until pairing-protocol provides the real value.
-const DEVICE_FINGERPRINT = 'SHA256:7ZqL 9N8u 4pVx aKw2 mR1d Yc6t Hn3s Bj0e';
+const FINGERPRINT_PLACEHOLDER = 'SHA256: …';
 
 // ISO → "May 3, 14:21" without Date.now / locales: deterministic, render-safe.
 const MONTHS = [
@@ -50,8 +57,8 @@ const MONTHS = [
   'Nov',
   'Dec',
 ];
-function formatLastSeen(iso: string): string {
-  // iso is `YYYY-MM-DDTHH:mm:ssZ` — index slicing avoids tz drift.
+function formatLastSeen(iso: string | null): string {
+  if (!iso) return 'never';
   const month = MONTHS[Number(iso.slice(5, 7)) - 1];
   const day = String(Number(iso.slice(8, 10)));
   const hh = iso.slice(11, 13);
@@ -61,17 +68,62 @@ function formatLastSeen(iso: string): string {
 
 export function SettingsConnectionScreen() {
   const router = useRouter();
-  const [deviceName, setDeviceName] = useState('iPad de Igna');
+  const pairedBackends = useConnectionStore((s) => s.pairedBackends);
+  const currentBackendId = useConnectionStore((s) => s.currentBackendId);
+  const connectionStatus = useConnectionStore((s) => s.connectionStatus);
+  const removeBackend = useConnectionStore((s) => s.removeBackend);
+  const setCurrentBackend = useConnectionStore((s) => s.setCurrentBackend);
 
-  const onMenuAction = (_serverId: string, _action: string) => {
-    // TODO(pairing-protocol): rename / revoke token / open audit log.
-    console.log('TODO(pairing-protocol)');
+  const [deviceName, setDeviceNameLocal] = useState('');
+  const [fingerprint, setFingerprint] = useState(FINGERPRINT_PLACEHOLDER);
+
+  useEffect(() => {
+    void getDeviceName().then(setDeviceNameLocal);
+    void getDeviceFingerprint().then(setFingerprint);
+  }, []);
+
+  const onSaveDeviceName = (next: string) => {
+    setDeviceNameLocal(next);
+    void persistDeviceName(next);
   };
 
-  const onCopyFingerprint = () => {
-    // TODO(pairing-protocol): expo-clipboard + toast.
-    console.log('TODO(pairing-protocol)');
+  const onMenuAction = async (serverId: string, action: string) => {
+    if (action === 'revoke') {
+      try {
+        await removeBackend(serverId);
+        if (currentBackendId === serverId) {
+          setCurrentBackend(null);
+        }
+        toast.info('Server unpaired');
+      } catch (err: unknown) {
+        toast.error(err instanceof Error ? err.message : 'Failed to revoke');
+      }
+      return;
+    }
+    if (action === 'audit') {
+      router.push('/settings/audit');
+      return;
+    }
+    if (action === 'rename') {
+      // Rename UI is part of the design but the store does not yet
+      // expose a per-backend rename action. Surface as info so the
+      // affordance is honest about its current scope.
+      toast.info('Rename is coming soon.');
+      return;
+    }
   };
+
+  const onCopyFingerprint = async () => {
+    try {
+      await Clipboard.setStringAsync(fingerprint);
+      toast.info(S.fingerprintCopiedToast);
+    } catch {
+      toast.error('Could not copy fingerprint');
+    }
+  };
+
+  const isOnline = (id: string): boolean =>
+    id === currentBackendId && connectionStatus === 'connected';
 
   return (
     <View className="flex-1 bg-canvas">
@@ -106,94 +158,114 @@ export function SettingsConnectionScreen() {
             {S.pairedServersDescription}
           </Text>
 
-          <View className="mt-4 gap-3">
-            {MOCK_PAIRED_SERVERS.map((srv) => (
-              <Card
-                key={srv.id}
-                className="flex-row items-center gap-4 rounded-lg border-border-subtle bg-surface px-4 py-4"
-              >
-                <View className="flex-1">
-                  <Text className="text-text-primary text-body-strong">
-                    {srv.name}
-                  </Text>
-                  <Text className="text-text-tertiary text-mono mt-1">
-                    {srv.ip}:{srv.port}
-                  </Text>
+          {pairedBackends.length === 0 ? (
+            <View className="mt-4 rounded-lg border border-border-subtle bg-surface px-4 py-6">
+              <Text className="text-text-primary text-body-strong">
+                {S.emptyPairedTitle}
+              </Text>
+              <Text className="text-text-tertiary text-caption mt-1">
+                {S.emptyPairedDescription}
+              </Text>
+            </View>
+          ) : (
+            <View className="mt-4 gap-3">
+              {pairedBackends.map((srv) => {
+                const online = isOnline(srv.id);
+                let host = srv.url;
+                try {
+                  host = new URL(srv.url).host;
+                } catch {
+                  /* fall through */
+                }
+                return (
+                  <Card
+                    key={srv.id}
+                    className="flex-row items-center gap-4 rounded-lg border-border-subtle bg-surface px-4 py-4"
+                  >
+                    <View className="flex-1">
+                      <Text className="text-text-primary text-body-strong">
+                        {srv.name}
+                      </Text>
+                      <Text className="text-text-tertiary text-mono mt-1">
+                        {host}
+                      </Text>
 
-                  <View className="flex-row items-center gap-3 mt-2">
-                    <View className="flex-row items-center gap-1.5">
-                      <View
-                        className={
-                          srv.online
-                            ? 'h-2 w-2 rounded-full bg-success'
-                            : 'h-2 w-2 rounded-full bg-text-tertiary'
-                        }
-                      />
-                      <Badge
-                        variant={srv.online ? 'secondary' : 'outline'}
-                        className={
-                          srv.online
-                            ? 'bg-success-muted border-transparent px-2 py-0.5'
-                            : 'border-border-subtle px-2 py-0.5'
-                        }
-                      >
-                        <Text
-                          className={
-                            srv.online
-                              ? 'text-success text-caption'
-                              : 'text-text-tertiary text-caption'
-                          }
-                        >
-                          {srv.online
-                            ? S.serverConnectedStatus
-                            : S.serverDisconnectedStatus}
+                      <View className="flex-row items-center gap-3 mt-2">
+                        <View className="flex-row items-center gap-1.5">
+                          <View
+                            className={
+                              online
+                                ? 'h-2 w-2 rounded-full bg-success'
+                                : 'h-2 w-2 rounded-full bg-text-tertiary'
+                            }
+                          />
+                          <Badge
+                            variant={online ? 'secondary' : 'outline'}
+                            className={
+                              online
+                                ? 'bg-success-muted border-transparent px-2 py-0.5'
+                                : 'border-border-subtle px-2 py-0.5'
+                            }
+                          >
+                            <Text
+                              className={
+                                online
+                                  ? 'text-success text-caption'
+                                  : 'text-text-tertiary text-caption'
+                              }
+                            >
+                              {online
+                                ? S.serverConnectedStatus
+                                : S.serverDisconnectedStatus}
+                            </Text>
+                          </Badge>
+                        </View>
+                        <Text className="text-text-tertiary text-caption">
+                          {S.serverLastActivityPrefix}: {formatLastSeen(srv.lastConnectedAt)}
                         </Text>
-                      </Badge>
+                      </View>
                     </View>
-                    <Text className="text-text-tertiary text-caption">
-                      {S.serverLastActivityPrefix}: {formatLastSeen(srv.lastSeen)}
-                    </Text>
-                  </View>
-                </View>
 
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      accessibilityLabel={S.serverMenuA11yLabel}
-                    >
-                      <MoreHorizontal size={18} color={tokens.colors.text.secondary} />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="min-w-[12rem]">
-                    <DropdownMenuItem
-                      onPress={() => onMenuAction(srv.id, 'rename')}
-                    >
-                      <Text className="text-text-primary text-body">
-                        {S.serverMenuRename}
-                      </Text>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onPress={() => onMenuAction(srv.id, 'revoke')}
-                      variant="destructive"
-                    >
-                      <Text className="text-danger text-body">
-                        {S.serverMenuRevokeToken}
-                      </Text>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onPress={() => onMenuAction(srv.id, 'audit')}
-                    >
-                      <Text className="text-text-primary text-body">
-                        {S.serverMenuShowAuditLog}
-                      </Text>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </Card>
-            ))}
-          </View>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          accessibilityLabel={S.serverMenuA11yLabel}
+                        >
+                          <MoreHorizontal size={18} color={tokens.colors.text.secondary} />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-[12rem]">
+                        <DropdownMenuItem
+                          onPress={() => onMenuAction(srv.id, 'rename')}
+                        >
+                          <Text className="text-text-primary text-body">
+                            {S.serverMenuRename}
+                          </Text>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onPress={() => void onMenuAction(srv.id, 'revoke')}
+                          variant="destructive"
+                        >
+                          <Text className="text-danger text-body">
+                            {S.serverMenuRevokeToken}
+                          </Text>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onPress={() => onMenuAction(srv.id, 'audit')}
+                        >
+                          <Text className="text-text-primary text-body">
+                            {S.serverMenuShowAuditLog}
+                          </Text>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </Card>
+                );
+              })}
+            </View>
+          )}
         </View>
 
         <Separator className="mt-8 bg-border-subtle" />
@@ -230,14 +302,13 @@ export function SettingsConnectionScreen() {
           </Text>
 
           <Card className="mt-4 gap-5 rounded-lg border-border-subtle bg-surface px-4 py-5">
-            {/* Device name */}
             <View className="gap-2">
               <Label className="text-text-secondary text-caption">
                 {S.deviceNameLabel}
               </Label>
               <Input
                 value={deviceName}
-                onChangeText={setDeviceName}
+                onChangeText={onSaveDeviceName}
                 placeholder={S.deviceNamePlaceholder}
                 className="bg-inset border-border-subtle text-text-primary"
               />
@@ -248,7 +319,6 @@ export function SettingsConnectionScreen() {
 
             <Separator className="bg-border-subtle" />
 
-            {/* Public key fingerprint */}
             <View className="gap-2">
               <Label className="text-text-secondary text-caption">
                 {S.fingerprintLabel}
@@ -256,11 +326,11 @@ export function SettingsConnectionScreen() {
               <View className="flex-row items-center gap-2">
                 <View className="flex-1 rounded-md border border-border-subtle bg-inset px-3 py-2">
                   <Text className="text-text-primary text-mono">
-                    {DEVICE_FINGERPRINT}
+                    {fingerprint}
                   </Text>
                 </View>
                 <Pressable
-                  onPress={onCopyFingerprint}
+                  onPress={() => void onCopyFingerprint()}
                   accessibilityRole="button"
                   accessibilityLabel={S.fingerprintCopyA11yLabel}
                   className="h-10 w-10 items-center justify-center rounded-md border border-border-subtle bg-elevated"

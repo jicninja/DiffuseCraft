@@ -285,7 +285,11 @@ function migrateConnectionPersistedState(
       if (typeof e.name !== 'string') continue;
       if (typeof e.url !== 'string' || e.url.length === 0) continue;
       const origin: PairedBackend['origin'] =
-        e.origin === 'mdns' || e.origin === 'qr' ? e.origin : 'manual';
+        e.origin === 'mdns' ||
+        e.origin === 'qr' ||
+        e.origin === 'code'
+          ? e.origin
+          : 'manual';
       survivors.push({
         id: e.id,
         name: e.name,

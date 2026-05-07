@@ -30,19 +30,8 @@ import {
   toast,
 } from '@diffusecraft/ui';
 
+import { completePairing } from '../../sdk/pairing-flow';
 import { PAIRING_MANUAL_STRINGS as S } from '../_strings/PairingManual';
-
-/**
- * Build a stable, content-addressed backend id from a base URL. We
- * cannot use the server-issued token (it's the secret) and the user
- * has not yet typed a name, so the URL is the only stable signal.
- * Replacing non-alphanumerics keeps the id storage-key-safe across
- * the persisted partialize and the secure-token key derivation.
- */
-function manualBackendId(url: string): string {
-  const slug = url.replace(/[^a-z0-9]/gi, '_').slice(0, 64);
-  return `manual-${slug}`;
-}
 
 export function PairingManualScreen() {
   const router = useRouter();
@@ -91,33 +80,11 @@ export function PairingManualScreen() {
         parsed = { url: trimmedUrl, token: trimmedToken };
       }
 
-      // Derive a stable backend id from the URL (the only durable
-      // identifier available before the SDK handshake reads
-      // `diffusecraft://server/info`). Use the URL host as the
-      // displayed name so the Settings.About debug card has a
-      // human-readable label.
-      const id = manualBackendId(parsed.url);
-      let displayName: string;
-      try {
-        displayName = new URL(parsed.url).host;
-      } catch {
-        // Unreachable — `parseManual` / `new URL` above already
-        // validated the URL. Defensive fallback so the toast does not
-        // throw on a malformed host.
-        displayName = parsed.url;
-      }
-
-      await pairBackend(
-        { id, name: displayName, origin: 'manual', url: parsed.url },
-        parsed.token,
+      await completePairing(
+        { pairBackend, setCurrentBackend },
+        'manual',
+        { url: parsed.url, token: parsed.token },
       );
-      setCurrentBackend(id);
-
-      toast.info(`Paired with ${displayName}`);
-      // Send the user back to the root index; the conditional router
-      // (apps/mobile/app/index.tsx) re-evaluates connection status and
-      // routes to the editor / documents view as appropriate.
-      router.replace('/');
     } finally {
       setSubmitting(false);
     }

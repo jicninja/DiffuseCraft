@@ -130,6 +130,12 @@ export interface PairResult {
 export interface RequestPairOptions {
   candidate_name?: string;
   method?: "mdns" | "qr" | "code" | "manual";
+  /**
+   * 6-digit numeric code shown on the server's pairing screen. Required
+   * when `method === "code"` (the server's `/pair` route validates it
+   * against open windows). Ignored for other methods.
+   */
+  code?: string;
   signal?: AbortSignal;
 }
 

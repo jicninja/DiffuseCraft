@@ -33,11 +33,29 @@ const config: ExpoConfig = {
     //   foregroundImage: './assets/adaptive-icon.png',
     //   backgroundColor: '#08090B',
     // },
+    // CHANGE_WIFI_MULTICAST_STATE is required for mDNS discovery to work
+    // on Android Wi-Fi networks (acquireMulticastLock).
+    permissions: [
+      'android.permission.CAMERA',
+      'android.permission.INTERNET',
+      'android.permission.ACCESS_WIFI_STATE',
+      'android.permission.ACCESS_NETWORK_STATE',
+      'android.permission.CHANGE_WIFI_MULTICAST_STATE',
+    ],
   },
   // expo-router: file-based routing rooted at apps/mobile/app/. The plugin
   // handles deep-link registration via the `scheme` above; routes under app/
   // map automatically (e.g. app/pair/qr.tsx → diffusecraft://pair/qr).
-  plugins: ['expo-router'],
+  plugins: [
+    'expo-router',
+    [
+      'expo-camera',
+      {
+        cameraPermission:
+          'DiffuseCraft uses the camera to scan the pairing QR code shown on your server screen.',
+      },
+    ],
+  ],
   experiments: {
     // Honour the workspace path aliases declared in tsconfig.base.json so
     // imports like '@diffusecraft/ui' resolve at runtime via Metro.
