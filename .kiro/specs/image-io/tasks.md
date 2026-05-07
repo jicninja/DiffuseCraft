@@ -69,7 +69,7 @@
 
 - [ ] 4. Server-side `.dcft` format
 
-- [ ] 4.1 (P) `DcftSerializer`: document → archive bytes
+- [x] 4.1 (P) `DcftSerializer`: document → archive bytes
   - Read the `documents` row, all `layers` rows in `position` order, and each layer's blob from the existing `blobs` store
   - For each layer, re-encode the blob bytes as PNG if the stored MIME is not already `image/png`
   - Build `manifest.json` and `document.json` per the schemas from task 1.3, computing `document_sha256` from the canonical (sorted-key) JSON serialization of `document.json`
