@@ -32,6 +32,7 @@ export type { CanvasViewProps } from './CanvasView';
 
 // ---- Image I/O platform adapter (image-io spec) ----
 export * from './io/adapter';
+export * from './io/composer';
 
 // ---- Brush rendering pipeline ----
 

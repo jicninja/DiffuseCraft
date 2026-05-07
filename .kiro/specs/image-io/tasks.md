@@ -56,7 +56,7 @@
   - _Boundary: libs/canvas-skia/src/io_
   - _Requirements: 1.1, 1.5, 1.6, 1.7, 2.1, 3.3, 4.5, 5.3, 5.4, 5.5_
 
-- [ ] 3. (P) Client-side multi-layer composite (`DocumentComposer`)
+- [x] 3. (P) Client-side multi-layer composite (`DocumentComposer`)
   - Walk `LayerSurfaceRegistry` in document layer order, drawing each visible layer onto a freshly-created `Skia.Surface` sized to canvas dimensions, honoring opacity and blend mode
   - Encode the composite via `surface.makeImageSnapshot().encodeToBytes(format, quality)`; PNG branch preserves alpha, JPEG branch flattens onto opaque white before encoding
   - Thread the supplied `AbortSignal` through every step; release intermediate `SkImage` and `Surface` handles immediately after each layer to keep peak memory ≤ 2 simultaneous layer surfaces
@@ -253,3 +253,7 @@
   - Observable completion: after each cancellation, the editor state is identical to the pre-cancel snapshot; `expo-file-system.cacheDirectory` shows no leftover temp `.dcft` or `.png` files
   - _Depends: 9.1_
   - _Requirements: 9.1, 9.2, 9.3_
+
+## Implementation Notes
+
+- **Task 3 → Task 8.1 precondition**: `DocumentComposer` reads layer bitmaps from `LayerSurfaceRegistry` only. The registry is populated by the brush pipeline at stroke commit; imported images / control / generation-history layers currently live in a separate `LayerImageCache` keyed by `content_blob_id` (see `libs/canvas-skia/src/adapter.ts` `rasterizeLayer`). For exported composites to include picker-imported images (R1.3, R1.4 → R4.2), task 8.1's `open-image` command must either (a) promote imported images into the registry as a real `SkSurface` after `addLayer` succeeds, or (b) extend `createDocumentComposer({...})` to also accept the blob cache and fall back to it when the registry has no surface for a layer id. Pick one approach during 8.1; the composer's interface won't change either way. The composer silently skips layers it can't resolve today, so a missing promotion will produce silently-incomplete exports — verify in 10.1 / 10.4 fixtures.
