@@ -172,7 +172,8 @@ graph TB
 ```
 libs/canvas-core/src/
 └── dcft/
-    └── types.ts                       # NEW: DcftManifestSchema, DcftDocumentJsonSchema (Zod)
+    ├── types.ts                       # NEW: DcftManifestSchema, DcftDocumentJsonSchema, DcftLayerEntrySchema (Zod)
+    └── limits.ts                      # NEW: IMAGE_MAX_PIXEL_COUNT, DCFT_MAX_BYTES, DCFT_FORMAT_VERSION — single source for both client and server
 
 libs/canvas-skia/src/
 ├── io/
@@ -180,14 +181,13 @@ libs/canvas-skia/src/
 │   ├── adapter.native.ts              # NEW: Expo-backed implementation
 │   ├── adapter.web.ts                 # NEW: File API + download implementation
 │   ├── composer.ts                    # NEW: composeDocumentToBytes(doc, format, quality)
-│   └── limits.ts                      # NEW: 100 Mpx and 2 GB constants, magic-byte helpers
+│   └── magic-bytes.ts                 # NEW: client-side magic-byte sniff helper
 
 libs/server/src/lib/
 ├── dcft/
 │   ├── archive.ts                     # NEW: fflate read/write wrappers (zip pack, zip unpack)
 │   ├── serializer.ts                  # NEW: Document and Layer rows + blobs to .dcft bytes
-│   ├── materializer.ts                # NEW: .dcft bytes to new Document and Layer rows + ingested blobs
-│   └── limits.ts                      # NEW: shared 2 GB cap, version constant
+│   └── materializer.ts                # NEW: .dcft bytes to new Document and Layer rows + ingested blobs
 └── transports/
     └── http.ts                        # MODIFIED: register POST /documents/import, GET /documents/:id/export
 

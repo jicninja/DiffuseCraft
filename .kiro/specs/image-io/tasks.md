@@ -29,7 +29,7 @@
   - Observable completion: a freshly-imported `DcftManifestSchema.safeParse({ version: 1, ... })` returns `success: true` for a valid object and `success: false` for `version: 2`
   - _Requirements: 2.3, 2.4, 2.6, 3.2, 3.10_
 
-- [ ] 1.4 Define shared size and pixel-count limits
+- [x] 1.4 Define shared size and pixel-count limits
   - Constant `IMAGE_MAX_PIXEL_COUNT = 100_000_000` (100 Mpx) used by client decode preflight
   - Constant `DCFT_MAX_BYTES = 2 * 1024 * 1024 * 1024` (2 GB) used by both `@fastify/multipart` configuration and client preflight
   - Constant `DCFT_FORMAT_VERSION = 1` re-exported alongside the Zod schemas so version checks have a single source
