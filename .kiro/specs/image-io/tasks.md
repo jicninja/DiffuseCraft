@@ -14,7 +14,7 @@
   - Observable completion: `apps/mobile/package.json` lists all five modules; `pnpm --filter mobile run typecheck` passes; the modules are importable from a scratch RN file
   - _Requirements: 1.1, 2.1, 3.3, 4.5, 5.3_
 
-- [ ] 1.2 Install server-side and shared format dependencies
+- [x] 1.2 Install server-side and shared format dependencies
   - Add `@fastify/multipart` to `libs/server/package.json`
   - Add `fflate` to `libs/server/package.json` (server side); evaluate whether `apps/mobile` also needs it for v1 — per design, only the server reads/writes archives, so the client does not bundle `fflate`
   - Add `file-type` to `libs/server/package.json` for magic-byte sniff on the import path
