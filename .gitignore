@@ -59,6 +59,12 @@ apps/mobile/design-snapshot/_exports/
 tmp/
 *.tmp
 
+# Claude Code internal state
+.claude/scheduled_tasks.lock
+
+# Stray files from CLI flag misfires (Metro/Expo writing logs to flag-names)
+apps/mobile/--*
+
 # visual-verification per-run outputs (FR-14)
 apps/mobile/visual-verification/captures/*
 !apps/mobile/visual-verification/captures/.gitkeep
