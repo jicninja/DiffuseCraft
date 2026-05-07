@@ -42,7 +42,7 @@
  * component only.
  */
 
-import type { Document, Layer, Viewport } from '@diffusecraft/canvas-core';
+import type { Document, Layer, Selection, Viewport } from '@diffusecraft/canvas-core';
 import {
   Canvas,
   Fill,
@@ -51,6 +51,8 @@ import {
   Rect,
   type SkImage,
 } from '@shopify/react-native-skia';
+
+import { SelectionOverlay } from './overlay/SelectionOverlay';
 
 /**
  * Local alias for the subset of RN-Skia's `Transforms3d` that this
@@ -67,8 +69,13 @@ type GroupTransform = Array<
   | { rotate: number }
 >;
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { View, type LayoutChangeEvent, type ViewStyle } from 'react-native';
-import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
+import { Platform, View, type LayoutChangeEvent, type ViewStyle } from 'react-native';
+import {
+  useDerivedValue,
+  useFrameCallback,
+  useSharedValue,
+  type SharedValue,
+} from 'react-native-reanimated';
 
 import { SkiaRenderAdapter, type SkiaRenderAdapterOptions } from './adapter';
 
@@ -115,6 +122,17 @@ export interface CanvasViewProps {
    * path falls back to `layer.opacity`.
    */
   getLayerOpacity?: (layerId: string) => SharedValue<number>;
+  /**
+   * Current selection (rect / lasso / mask / none) from the editor
+   * store. Rendered as a marching-ants overlay inside the document
+   * `<Group>` so it inherits the viewport transform — strokes scale
+   * and rotate with the canvas like every other document-space feature.
+   *
+   * Mask and `none` selections render nothing here: masks are
+   * communicated by the active-layer border / mask preview overlays
+   * owned by other parts of the renderer.
+   */
+  selection?: Selection;
 }
 
 /**
@@ -150,6 +168,7 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
   onAdapterReady,
   activeStrokeImage,
   getLayerOpacity,
+  selection,
 }) => {
   // Adapter must be a single, stable instance for the entire lifetime of
   // this component. `useMemo` is not a semantic guarantee in React 18 — it
@@ -241,6 +260,54 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
     [document],
   );
 
+  // ─── Web-only frame driver for in-progress strokes ───────────────────
+  // On native (iOS/Android), RN-Skia subscribes to `SharedValue<SkImage>`
+  // via JSI and repaints on the GPU thread when the value changes — no
+  // React re-render is involved during stroke movement. On web there is
+  // no JSI bridge: `Container.web` runs CanvasKit on the JS main thread
+  // and only repaints when its reconciler observes a prop change. The
+  // per-stamp updates to `activeStrokeImage` happen inside a worklet
+  // (running on the same thread on web) and do NOT propagate to the
+  // `<Image>` re-presentation reliably — strokes only become visible at
+  // gesture-end when zustand state mutates and triggers a React commit.
+  //
+  // This driver bridges the gap with one extra reactive hop:
+  //   1. A `useFrameCallback` runs every frame; on web while a stroke is
+  //      active it increments `webStrokeTick`.
+  //   2. `activeStrokeImageReactive` is a derived value that reads BOTH
+  //      `webStrokeTick` and the underlying `activeStrokeImage`. Even if
+  //      RN-Skia web fails to subscribe to the inner SharedValue's
+  //      mutations directly, the dependency on `webStrokeTick` guarantees
+  //      the derived re-emits on every frame, which the reconciler does
+  //      pick up.
+  //   3. On native the frame callback is registered with autostart=false
+  //      so it never runs; the derived value collapses to a no-op pass-
+  //      through (`webStrokeTick` is never read after setup, so the
+  //      derived only re-emits when `activeStrokeImage` itself changes —
+  //      same as the bare prop, which JSI already handles).
+  //
+  // Cost on web: one rAF tick + one derived re-eval per frame, only
+  // while a stroke is active. No React reconciler work.
+  const isWeb = Platform.OS === 'web';
+  const webStrokeTick = useSharedValue(0);
+  useFrameCallback(() => {
+    'worklet';
+    if (!isWeb) return;
+    if (!activeStrokeImage || activeStrokeImage.value === null) return;
+    webStrokeTick.value = webStrokeTick.value + 1;
+  }, isWeb);
+  const activeStrokeImageReactive = useDerivedValue<SkImage | null>(() => {
+    // Web: depend on the tick so the derived re-emits every frame.
+    // Native: branch returns immediately so the tick is never read and
+    // the derived only re-emits when the underlying value changes
+    // (which JSI propagates anyway).
+    if (isWeb) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+      webStrokeTick.value;
+    }
+    return activeStrokeImage?.value ?? null;
+  });
+
   return (
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-expect-error nativewind augments View with `className` at runtime;
@@ -327,13 +394,19 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
                 via JSI). */}
             {activeStrokeImage ? (
               <Image
-                image={activeStrokeImage as unknown as SkImage}
+                image={activeStrokeImageReactive as unknown as SkImage}
                 x={0}
                 y={0}
                 width={docWidth}
                 height={docHeight}
               />
             ) : null}
+
+            {/* Selection marching-ants overlay (selection-tools FR-27).
+                Rendered inside the document `<Group>` so the dashed
+                outline scales and rotates with the canvas. The
+                component is a no-op for mask / none selections. */}
+            {selection ? <SelectionOverlay selection={selection} /> : null}
           </Group>
         )}
       </Canvas>

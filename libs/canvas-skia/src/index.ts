@@ -23,6 +23,8 @@ export { drawActiveLayerBorder } from './overlay/active-layer-border';
 export type { ActiveLayerBorderStyle } from './overlay/active-layer-border';
 export { drawSelectionOverlay } from './overlay/selection-overlay';
 export type { SelectionOverlayStyle } from './overlay/selection-overlay';
+export { SelectionOverlay } from './overlay/SelectionOverlay';
+export type { SelectionOverlayProps } from './overlay/SelectionOverlay';
 export { CanvasView } from './CanvasView';
 export type { CanvasViewProps } from './CanvasView';
 

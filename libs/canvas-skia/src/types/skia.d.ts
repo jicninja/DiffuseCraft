@@ -69,6 +69,7 @@ declare module '@shopify/react-native-skia' {
     moveTo(x: number, y: number): void;
     lineTo(x: number, y: number): void;
     quadTo(x1: number, y1: number, x2: number, y2: number): void;
+    addRect(rect: SkRect): void;
     close(): void;
   }
 
@@ -244,6 +245,27 @@ declare module '@shopify/react-native-skia' {
     children?: ReactNode;
   }
   export const Picture: ComponentType<PictureProps>;
+
+  /** Declarative Path component — strokes / fills an SkPath. */
+  export interface PathProps {
+    path: SkPath | string;
+    color?: string | number;
+    style?: 'stroke' | 'fill';
+    strokeWidth?: number;
+    antiAlias?: boolean;
+    opacity?: number;
+    start?: number;
+    end?: number;
+    children?: ReactNode;
+  }
+  export const Path: ComponentType<PathProps>;
+
+  /** Declarative DashPathEffect — child of `<Path>`. */
+  export interface DashPathEffectProps {
+    intervals: number[];
+    phase?: number;
+  }
+  export const DashPathEffect: ComponentType<DashPathEffectProps>;
 
   /** Hook returning a ref to the underlying surface. */
   export function useCanvasRef(): RefObject<SkSurface>;

@@ -8,15 +8,12 @@
  * blob resolution.
  *
  * Overlay wiring (task 9.1):
- *  - Reads `activeLayerId` and `selection` from `editorStore` to drive
- *    the active-layer border (FR-46) and selection overlay (FR-27).
- *  - Derives `activeLayerKind` from the document's layer stack to enable
- *    the mask preview overlay (FR-30) when a mask layer is active.
- *  - These are passed as additional props to `CanvasView`. The canvas-skia
- *    `CanvasView` component will consume them once its props interface is
- *    extended to accept overlay configuration. The imperative overlay
- *    drawing functions (`drawSelectionOverlay`, `drawActiveLayerBorder`)
- *    already exist in `canvas-skia/overlay/`.
+ *  - Reads `selection` from `editorStore`, maps the snapshot to
+ *    canvas-core's `Selection` shape, and forwards it to `CanvasView`
+ *    for the marching-ants overlay (FR-27).
+ *  - `activeLayerId` and `activeLayerKind` are derived for upcoming
+ *    overlays (active-layer border FR-46, mask preview FR-30) — those
+ *    props land when `CanvasView` extends its overlay surface.
  *
  * Style: `flex: 1` fills the available area between floating chrome (FR-4).
  *
@@ -188,6 +185,13 @@ export function CanvasArea({ document }: CanvasAreaProps) {
             // identical at runtime.
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             getLayerOpacity={liveOpacityFor as any}
+            // FR-27: marching-ants overlay. The store snapshot is mapped
+            // to canvas-core's `Selection` union (rect passes through;
+            // mask/none render nothing in the overlay). Cast crosses the
+            // workspace's duplicated canvas-core package identity (same
+            // caveat as `activeStrokeImage` and `getLayerOpacity`).
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            selection={selection as any}
           />
         </View>
       </GestureDetector>
