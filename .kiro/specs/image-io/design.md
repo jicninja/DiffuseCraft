@@ -54,7 +54,7 @@
 ### Allowed Dependencies
 
 - Existing libraries:
-  - `libs/canvas-core` — layer / document / blob types; the `.dcft v1` Zod schemas live here so both client and server can import them.
+  - `libs/canvas-core` — layer / document / blob types; the `.dcft v1` Zod schemas live here so both client and server can import them. **Adds `zod` as a runtime dependency** (canvas-core was previously zod-free; the `.dcft` schemas are the first Zod usage in the lib and are intentionally decoupled from the in-memory TS interfaces, mirroring rather than extending them).
   - `libs/canvas-skia` — Surface, `encodeToBytes`, `LayerSurfaceRegistry`; the platform adapter and composer live here because they are RN-platform code (`platform:rn` tag).
   - `libs/server` — Fastify, `dcft_*` bearer auth, blob store, db migrations.
   - `libs/core` — Zustand stores (extends `editor` slice with a `dirty` field).
@@ -74,7 +74,7 @@
 
 ### Revalidation Triggers
 
-- Change to the `Layer` shape in `libs/canvas-core/src/layers/types.ts` → re-validate `.dcft v1` round-trip equivalence and bump format version if the field is exposed.
+- Change to the `Layer` or `Document` shape in `libs/canvas-core/src/{layers,document}/types.ts` → manually re-sync the mirrored Zod schemas in `libs/canvas-core/src/dcft/types.ts` and re-validate `.dcft v1` round-trip equivalence; bump format version if the change is exposed in the persisted shape.
 - New layer `kind` value (e.g. `animation`, `vector`) → `.dcft v1` materializer must reject; format must bump.
 - Change to pairing-token auth → re-validate `/documents/import` and `/documents/:id/export` route guards.
 - canvaskit-wasm version change on web → re-validate `encodeToBytes` JPEG/PNG parity and 25 Mpx composite memory ceiling.
@@ -517,14 +517,78 @@ export type ComposeError =
 
 ##### Schema (Zod)
 
+The `.dcft` Zod schemas are **self-contained**: they mirror (not extend) the persisted shape of the canvas-core `Layer` and `Document` interfaces. Decoupling them from the in-memory TS types keeps the file format independent of internal type evolution and avoids needing parallel Zod schemas for every in-memory model. `libs/canvas-core` gains a runtime `zod` dependency for this purpose.
+
 ```typescript
 import { z } from 'zod';
-import { LayerSchema, DocumentSchema } from '../layers/types';
+
+const ULID_REGEX = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const SHA256_REGEX = /^[0-9a-f]{64}$/;
+
+// Mirrors canvas-core BlendMode (kept in lock-step manually; revalidate on FR-5/FR-6 changes).
+const BlendModeSchema = z.enum([
+  'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten',
+  'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference',
+  'exclusion', 'hue', 'saturation', 'color', 'luminosity',
+]);
+
+const ControlTypeSchema = z.enum([
+  'reference', 'style', 'composition', 'face',
+  'scribble', 'line_art', 'soft_edge', 'canny',
+  'depth', 'normal', 'pose', 'segmentation',
+]);
+
+export const DcftLayerEntrySchema = z.object({
+  id: z.string().regex(ULID_REGEX),
+  document_id: z.string().regex(ULID_REGEX),
+  kind: z.enum(['paint', 'mask', 'control', 'region']),
+  name: z.string(),
+  position: z.number().int().nonnegative(),
+  opacity: z.number().min(0).max(1),
+  visible: z.boolean(),
+  locked: z.boolean(),
+  blend_mode: BlendModeSchema,
+  clip_mask: z.object({ source_layer_id: z.string().regex(ULID_REGEX) }).optional(),
+  group_id: z.string().optional(),
+  control_type: ControlTypeSchema.optional(),
+  region_data: z.object({
+    paint_layer_id: z.string().regex(ULID_REGEX),
+    prompt: z.string(),
+  }).optional(),
+  mask_data: z.union([
+    z.object({ subkind: z.literal('painted') }),
+    z.object({
+      subkind: z.literal('from_layer'),
+      source_layer_id: z.string().regex(ULID_REGEX),
+      channel: z.enum(['alpha', 'luminance']),
+      invert: z.boolean(),
+    }),
+  ]).optional(),
+  created_at: z.string().datetime(),
+  // .dcft-specific: replaces in-memory `content_blob_id`.
+  raster_path: z.string().regex(/^layers\/[0-9A-HJKMNP-TV-Z]{26}\.png$/),
+});
+
+export const DcftDocumentJsonSchema = z.object({
+  id: z.string().regex(ULID_REGEX),
+  name: z.string(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  color_mode: z.literal('srgb'),
+  layers: z.array(DcftLayerEntrySchema),
+  // Persisted document fields used by the materializer.
+  created_at: z.string().datetime(),
+  modified_at: z.string().datetime(),
+  // Note: `selection`, `active_layer_id`, `groups` are UI state and are
+  // intentionally NOT persisted in v1 — the materialized doc starts with
+  // a clean selection and no active layer; groups are deferred to a
+  // future format bump.
+});
 
 export const DcftManifestSchema = z.object({
   version: z.literal(1),
-  document_id: z.string().ulid(),
-  document_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  document_id: z.string().regex(ULID_REGEX),
+  document_sha256: z.string().regex(SHA256_REGEX),
   layer_count: z.number().int().nonnegative(),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
@@ -532,16 +596,8 @@ export const DcftManifestSchema = z.object({
 });
 
 export type DcftManifest = z.infer<typeof DcftManifestSchema>;
-
-export const DcftLayerEntrySchema = LayerSchema.extend({
-  raster_path: z.string().regex(/^layers\/[0-9A-HJKMNP-TV-Z]{26}\.png$/),
-});
-
-export const DcftDocumentJsonSchema = DocumentSchema.extend({
-  layers: z.array(DcftLayerEntrySchema),
-});
-
 export type DcftDocumentJson = z.infer<typeof DcftDocumentJsonSchema>;
+export type DcftLayerEntry = z.infer<typeof DcftLayerEntrySchema>;
 ```
 
 - Invariants: `document_sha256` is the SHA-256 of the JSON serialization of `document.json` after stable-key sort; `layer_count` matches `layers.length`; every `raster_path` exists in the archive at exactly that path.

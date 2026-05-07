@@ -21,11 +21,12 @@
   - Observable completion: `pnpm install` resolves cleanly; `pnpm --filter server run typecheck` passes; the three packages are importable from `libs/server/src`
   - _Requirements: 2.3, 3.2, 8.3, 8.5_
 
-- [ ] 1.3 Define the `.dcft v1` Zod schemas in `libs/canvas-core`
-  - Add `DcftManifestSchema`, `DcftDocumentJsonSchema`, and `DcftLayerEntrySchema` exactly as written in `design.md` § "canvas-core / format"
-  - Re-export `DcftManifest` and `DcftDocumentJson` from the `canvas-core` public index so both client and server can import the same schemas
+- [x] 1.3 Define the `.dcft v1` Zod schemas in `libs/canvas-core`
+  - Add `zod` as a runtime dependency to `libs/canvas-core/package.json` (canvas-core was previously zod-free)
+  - Add `DcftManifestSchema`, `DcftDocumentJsonSchema`, `DcftLayerEntrySchema` exactly as written in `design.md` § "canvas-core / format". The schemas are **self-contained** (mirror, do not extend, the canvas-core TS interfaces) — canvas-core has no Zod schemas to extend from, and decoupling the file format from the in-memory shape is intentional
+  - Re-export `DcftManifest`, `DcftDocumentJson`, `DcftLayerEntry` types and the schema constants from the `canvas-core` public index
   - Pin `version: z.literal(1)` so unknown manifest versions fail Zod validation deterministically
-  - Observable completion: a freshly-imported `DcftManifestSchema.parse({ version: 1, ... })` round-trips a valid object and rejects `version: 2`
+  - Observable completion: a freshly-imported `DcftManifestSchema.safeParse({ version: 1, ... })` returns `success: true` for a valid object and `success: false` for `version: 2`
   - _Requirements: 2.3, 2.4, 2.6, 3.2, 3.10_
 
 - [ ] 1.4 Define shared size and pixel-count limits

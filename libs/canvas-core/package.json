@@ -13,7 +13,8 @@
     "test": "tsx src/__tests__/run-tests.ts"
   },
   "dependencies": {
-    "@diffusecraft/mcp-tools": "workspace:*"
+    "@diffusecraft/mcp-tools": "workspace:*",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "tsx": "^4.19.1",

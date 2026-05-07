@@ -51,3 +51,6 @@ export * from './mask';
 // ---- Shared ----
 export * from './shared/ulid';
 export * from './shared/ids';
+
+// ---- .dcft v1 portable file format (Zod schemas) ----
+export * from './dcft/types';
