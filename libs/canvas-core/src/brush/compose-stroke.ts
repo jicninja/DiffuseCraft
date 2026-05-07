@@ -25,6 +25,7 @@
  */
 
 import type { RasterBuffer } from '../blend/compose';
+import { sampleClipAt, type SelectionClip } from '../composite/selection-clip';
 
 import type { Stamp } from './stamps';
 
@@ -47,6 +48,14 @@ export interface ComposeStrokeOptions {
    * `mask-system` FR-7). When `color` is omitted, luminance defaults to 1.
    */
   readonly maskOnly?: boolean;
+  /**
+   * Selection-as-clip snapshot (selection-tools FR-34/FR-37). When present,
+   * each pixel's stamp coverage is multiplied by `sampleClipAt(clip, px, py)`
+   * before the existing alpha math; outside-selection pixels remain
+   * bit-identical (the per-pixel branch short-circuits when clip alpha is 0).
+   * When omitted, behavior is bit-identical to the pre-clip pipeline.
+   */
+  readonly clip?: SelectionClip;
 }
 
 const u8 = (v: number): number =>
@@ -95,6 +104,7 @@ export const composeStrokeIntoRaster = (
 
   const color = options.color ?? null;
   const lum = options.maskOnly && color ? luminance(color) : 1;
+  const clip = options.clip ?? null;
 
   for (const stamp of stamps) {
     const radius = stamp.size * 0.5;
@@ -108,8 +118,10 @@ export const composeStrokeIntoRaster = (
       for (let px = minX; px <= maxX; px++) {
         const cov = stampCoverage(px + 0.5 - stamp.x, py + 0.5 - stamp.y, radius, stamp.hardness);
         if (cov <= 0) continue;
+        const clipAlpha = clip === null ? 1 : sampleClipAt(clip, px, py);
+        if (clipAlpha <= 0) continue;
         const idx = (py * width + px) * 4;
-        const sa = cov * stamp.opacity;
+        const sa = cov * stamp.opacity * clipAlpha;
         if (sa <= 0) continue;
         const dr = out[idx]! / 255;
         const dg = out[idx + 1]! / 255;

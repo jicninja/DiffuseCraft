@@ -27,10 +27,37 @@
  * Requirements: FR-1, FR-2, FR-4, FR-9, FR-10, FR-13, FR-14, FR-16, FR-17,
  *               FR-18, FR-19, FR-20, FR-22, FR-23, FR-24, FR-25, FR-26,
  *               FR-27, FR-28, FR-29, FR-47
+ *
+ * Tap-to-deselect (selection-tools FR-40/FR-41/FR-45): the lasso and
+ * rect-select gestures are wrapped in `Gesture.Race(tapDeselect, pan)` so
+ * a clean tap (no drag) on the canvas in `Replace` mode clears the active
+ * selection. A drag still starts a lasso path / rect rectangle. The tap
+ * thresholds (4 pt translation, 250 ms duration) match iOS HIG tap
+ * recognition.
  */
 
+/** Tap-deselect max translation in points (selection-tools FR-45). */
+const TAP_DESELECT_MAX_DISTANCE_PT = 4;
+/** Tap-deselect max duration in ms (selection-tools FR-45). */
+const TAP_DESELECT_MAX_DURATION_MS = 250;
+
 import { useCallback, useContext, useMemo, useRef } from 'react';
-import { Gesture, type GestureType } from 'react-native-gesture-handler';
+import {
+  Gesture,
+  type ComposedGesture,
+  type GestureType,
+} from 'react-native-gesture-handler';
+
+/**
+ * Either a single base gesture (Pan / Tap / LongPress / ...) or a composed
+ * gesture tree (Race / Exclusive / Simultaneous). The tool gesture builders
+ * return either: lasso/rect-select use `Gesture.Race(tapDeselect, pan)` after
+ * FR-40, while brush / transform / eyedropper return single gestures.
+ *
+ * `Gesture.Exclusive(...)` in `useGestureCompositor` accepts both shapes,
+ * so widening here costs no consumer changes.
+ */
+type ToolGesture = GestureType | ComposedGesture;
 import {
   makeMutable,
   runOnJS,
@@ -390,86 +417,125 @@ export function useToolGestures(
     docSizeSV,
   ]);
 
-  const buildLassoGesture = useCallback((): GestureType => {
-    return Gesture.Pan()
+  /**
+   * Tap-to-deselect factory (selection-tools FR-40/FR-41/FR-45/FR-46).
+   *
+   * Returns a `Gesture.Tap` that, when it ends within the FR-45 thresholds
+   * (4 pt translation, 250 ms duration), reads the current selection mode
+   * and clears the active selection only when the mode is `replace` and a
+   * non-empty selection exists. In `add` / `subtract` / `intersect` modes
+   * the tap is a no-op (FR-41) so accidental compound-selection loss is
+   * impossible.
+   *
+   * Composed via `Gesture.Race(tap, pan)` with each area-selection gesture
+   * builder; the Pan side activates as soon as translation exceeds RNGH's
+   * default threshold (~2 pt), so the tap-vs-drag discrimination is safe.
+   */
+  const buildSelectionTapDeselectGesture = useCallback((): GestureType => {
+    return Gesture.Tap()
       .runOnJS(true)
-      .minPointers(1)
-      .maxPointers(1)
-      .onBegin((e) => {
-        const docPt = toDoc(viewport.ref.current, e.x, e.y);
-        selectionPathRef.current = [{ x: docPt.x, y: docPt.y }];
-      })
-      .onUpdate((e) => {
-        const docPt = toDoc(viewport.ref.current, e.x, e.y);
-        selectionPathRef.current.push({ x: docPt.x, y: docPt.y });
-      })
+      .maxDistance(TAP_DESELECT_MAX_DISTANCE_PT)
+      .maxDuration(TAP_DESELECT_MAX_DURATION_MS)
       .onEnd(() => {
-        const path = selectionPathRef.current;
-        if (path.length < 3) {
-          selectionPathRef.current = [];
-          return;
-        }
-
-        // Close the lasso path using canvas-core's simplification.
-        const closed = closeLassoPath(path);
-
-        // FR-27: Update editorStore.selectionSlice with the new selection.
-        // The selection is stored as a mask URI — in the local-only phase
-        // we store a placeholder. Full mask rasterization requires the
-        // server-side selection pipeline.
-        void closed;
-        // TODO(client-sdk): convert closed path to selection mask and
-        // call state.setSelection({ kind: 'mask', mask_uri: '...' })
-
-        selectionPathRef.current = [];
-      })
-      .onFinalize(() => {
-        selectionPathRef.current = [];
+        const state = editorStore.getState();
+        // FR-41: only Replace mode triggers deselect.
+        if (state.selectionMode !== 'replace') return;
+        // Already empty — silently no-op so we don't pollute future undo.
+        if (state.selection.kind === 'none') return;
+        // FR-40: clear the selection. FR-46 reversibility is partial in v0.2:
+        // the client-side selection slice has no undo of its own; server-side
+        // undo lands when the mobile client wires `set_selection({kind:"none"})`
+        // through MCP (tracked in selection-tools/tasks.md K.5.1 _Blocked_).
+        state.setSelection({ kind: 'none' });
       });
-  }, [viewport]);
+  }, [editorStore]);
 
-  const buildRectSelectGesture = useCallback((): GestureType => {
-    return Gesture.Pan()
-      .runOnJS(true)
-      .minPointers(1)
-      .maxPointers(1)
-      .onBegin((e) => {
-        const docPt = toDoc(viewport.ref.current, e.x, e.y);
-        selectionPathRef.current = [{ x: docPt.x, y: docPt.y }];
-      })
-      .onUpdate((e) => {
-        const docPt = toDoc(viewport.ref.current, e.x, e.y);
-        // For rect-select we only need the start and current point.
-        if (selectionPathRef.current.length > 0) {
-          selectionPathRef.current[1] = { x: docPt.x, y: docPt.y };
-        }
-      })
-      .onEnd(() => {
-        const path = selectionPathRef.current;
-        if (path.length < 2) {
+  const buildLassoGesture = useCallback((): ToolGesture => {
+    // FR-40: tap-to-deselect raced against the lasso pan. A clean tap clears
+    // the selection; any drag past ~2 pt activates Pan and starts a lasso.
+    return Gesture.Race(
+      buildSelectionTapDeselectGesture(),
+      Gesture.Pan()
+        .runOnJS(true)
+        .minPointers(1)
+        .maxPointers(1)
+        .onBegin((e) => {
+          const docPt = toDoc(viewport.ref.current, e.x, e.y);
+          selectionPathRef.current = [{ x: docPt.x, y: docPt.y }];
+        })
+        .onUpdate((e) => {
+          const docPt = toDoc(viewport.ref.current, e.x, e.y);
+          selectionPathRef.current.push({ x: docPt.x, y: docPt.y });
+        })
+        .onEnd(() => {
+          const path = selectionPathRef.current;
+          if (path.length < 3) {
+            selectionPathRef.current = [];
+            return;
+          }
+
+          // FR-27: Store the closed polygon as a lasso selection so the
+          // marching-ants overlay renders. Server-side rasterization to a
+          // mask layer is a separate concern (mask-system spec); the client
+          // mirror carries the polygon directly.
+          const closed = closeLassoPath(path);
+          editorStore.getState().setSelection({ kind: 'lasso', points: closed });
+
           selectionPathRef.current = [];
-          return;
-        }
+        })
+        .onFinalize(() => {
+          selectionPathRef.current = [];
+        }),
+    );
+  }, [viewport, editorStore, buildSelectionTapDeselectGesture]);
 
-        const start = path[0]!;
-        const end = path[1]!;
-        const x = Math.min(start.x, end.x);
-        const y = Math.min(start.y, end.y);
-        const w = Math.abs(end.x - start.x);
-        const h = Math.abs(end.y - start.y);
+  const buildRectSelectGesture = useCallback((): ToolGesture => {
+    // FR-40: same Race(tap, pan) pattern as lasso. A clean tap clears the
+    // selection; any drag past ~2 pt activates Pan and starts a rect.
+    return Gesture.Race(
+      buildSelectionTapDeselectGesture(),
+      Gesture.Pan()
+        .runOnJS(true)
+        .minPointers(1)
+        .maxPointers(1)
+        .onBegin((e) => {
+          const docPt = toDoc(viewport.ref.current, e.x, e.y);
+          selectionPathRef.current = [{ x: docPt.x, y: docPt.y }];
+        })
+        .onUpdate((e) => {
+          const docPt = toDoc(viewport.ref.current, e.x, e.y);
+          // For rect-select we only need the start and current point.
+          if (selectionPathRef.current.length > 0) {
+            selectionPathRef.current[1] = { x: docPt.x, y: docPt.y };
+          }
+        })
+        .onEnd(() => {
+          const path = selectionPathRef.current;
+          if (path.length < 2) {
+            selectionPathRef.current = [];
+            return;
+          }
 
-        if (w > 0 && h > 0) {
-          // FR-26, FR-27: Update selection with the rectangle.
-          const state = editorStore.getState();
-          state.setSelection({ kind: 'rect', rect: { x, y, w, h } });
-        }
+          const start = path[0]!;
+          const end = path[1]!;
+          const x = Math.min(start.x, end.x);
+          const y = Math.min(start.y, end.y);
+          const w = Math.abs(end.x - start.x);
+          const h = Math.abs(end.y - start.y);
 
-        selectionPathRef.current = [];
-      })
-      .onFinalize(() => {
-        selectionPathRef.current = [];
-      });
-  }, [viewport, editorStore]);
+          if (w > 0 && h > 0) {
+            // FR-26, FR-27: Update selection with the rectangle.
+            const state = editorStore.getState();
+            state.setSelection({ kind: 'rect', rect: { x, y, w, h } });
+          }
+
+          selectionPathRef.current = [];
+        })
+        .onFinalize(() => {
+          selectionPathRef.current = [];
+        }),
+    );
+  }, [viewport, editorStore, buildSelectionTapDeselectGesture]);
 
   const buildTransformGesture = useCallback((): GestureType => {
     return Gesture.Pan()
@@ -589,7 +655,7 @@ export function useToolGestures(
   // ---- Public API ----
 
   const forTool = useCallback(
-    (tool: EditorTool): GestureType => {
+    (tool: EditorTool): ToolGesture => {
       switch (tool) {
         case 'brush':
         case 'eraser':

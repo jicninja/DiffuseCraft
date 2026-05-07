@@ -3,14 +3,31 @@
   "slug": "selection-tools",
   "title": "Selection Tools (rect / lasso / magic-wand / refine + AI tier stubs)",
   "language": "en",
-  "status": "implementation",
+  "status": "tasks-extension",
   "phases": {
     "requirements": "approved",
     "design": "approved",
     "tasks": "approved",
-    "implementation": "completed"
+    "implementation": "partial"
   },
   "implemented_at": "2026-05-03",
+  "extended_at": "2026-05-07",
+  "extension_scope": [
+    "FR-34..FR-39 (§3.8 Edit scoping / selection-as-clip)",
+    "FR-40..FR-46 (§3.9 Tap-to-deselect gesture)",
+    "Q8..Q11 (open questions tied to the new FRs)"
+  ],
+  "implementation_gap": {
+    "selection_as_clip_brush": "DONE 2026-05-07 (K.1.1, K.2.1, K.2.2, K.3.1, K.3.2). SelectionClip helper in libs/canvas-core/src/composite/, compose-stroke.ts accepts optional clip, paint-strokes captures clip at op-begin, SelectionClipBoundary wraps Skia preview.",
+    "selection_as_clip_transform": "BLOCKED — transform-layer.ts stores decomposed transform_json; v1 has no rasterize/flatten step. Re-evaluate when image-io paste lands.",
+    "selection_as_clip_paste": "BLOCKED — image-io spec is in design phase, no paste handler exists yet. Re-open as part of image-io implementation.",
+    "selection_as_clip_ai_composition": "BLOCKED — generate-image creates new layers from AI output; no inpaint→existing-layer composition path in v1. Re-evaluate when an inpaint-into-layer mode lands.",
+    "tap_to_deselect_lasso_rect": "DONE 2026-05-07 (K.4.1, K.4.2). Tap thresholds + factory + Gesture.Race wrap for lasso/rect-select with replace-mode-only check.",
+    "tap_to_deselect_polygonal_lasso": "BLOCKED — polygonal-lasso is not a member of the mobile EditorTool union; no UI surface exists. Re-open with screens-implementation tool addition.",
+    "tap_to_deselect_magic_wand_audit": "BLOCKED — magic-wand and auto-select are not members of the mobile EditorTool union; nothing to audit until those tools land in the UI.",
+    "deselect_undo_label": "BLOCKED — client-side selection-slice has no undo mechanism. Server-side undo requires routing the gesture through MCP set_selection({kind:'none'}). Re-open as a client-state-architecture integration task.",
+    "manual_hardware_verification": "PENDING — requires physical iPad + Apple Pencil. Run design §14 12-row checklist when hardware is available."
+  },
   "depends_on": ["canvas-fundamentals", "mcp-tool-catalog", "server-architecture"],
   "blocks": ["regions"],
   "created_at": "2026-05-03"

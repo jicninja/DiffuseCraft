@@ -52,6 +52,7 @@ import {
   type SkImage,
 } from '@shopify/react-native-skia';
 
+import { SelectionClipBoundary } from './clip/SelectionClipBoundary';
 import { SelectionOverlay } from './overlay/SelectionOverlay';
 
 /**
@@ -387,25 +388,36 @@ export const CanvasView: React.FC<CanvasViewProps> = ({
                 event during a stroke. RN-Skia's `<Image>` tolerates a null
                 value and renders nothing for that frame.
 
+                Wrapped in `<SelectionClipBoundary>` so the brush preview
+                respects the active selection identically to the server
+                compositor (selection-tools FR-34). The boundary is a
+                pass-through when selection is `none` — zero overhead. The
+                marching-ants overlay below renders OUTSIDE the boundary so
+                it remains visible regardless of the clip.
+
                 The cast is necessary because RN-Skia's `SkiaProps<T>` does
                 not infer the structural-arm assignment for SharedValue when
                 the target type is a union containing `null` — runtime
                 behaviour is correct (RN-Skia detects the `.value` property
                 via JSI). */}
             {activeStrokeImage ? (
-              <Image
-                image={activeStrokeImageReactive as unknown as SkImage}
-                x={0}
-                y={0}
-                width={docWidth}
-                height={docHeight}
-              />
+              <SelectionClipBoundary selection={selection}>
+                <Image
+                  image={activeStrokeImageReactive as unknown as SkImage}
+                  x={0}
+                  y={0}
+                  width={docWidth}
+                  height={docHeight}
+                />
+              </SelectionClipBoundary>
             ) : null}
 
             {/* Selection marching-ants overlay (selection-tools FR-27).
                 Rendered inside the document `<Group>` so the dashed
                 outline scales and rotates with the canvas. The
-                component is a no-op for mask / none selections. */}
+                component is a no-op for mask / none selections.
+                Rendered AFTER (so above) the clipped active stroke so
+                the dashed outline always remains visible. */}
             {selection ? <SelectionOverlay selection={selection} /> : null}
           </Group>
         )}

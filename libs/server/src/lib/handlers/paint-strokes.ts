@@ -49,10 +49,12 @@ import {
   BRUSH_PRESETS,
   type BrushPresetId,
   type BrushPreset,
+  captureSelectionClip,
   expandStrokeToStamps,
   composeStrokeIntoRaster,
   parseBrushColor,
   stampsBoundingBox,
+  type SelectionClip,
   type Stamp,
 } from '@diffusecraft/canvas-core';
 import type { Database as DB } from 'better-sqlite3';
@@ -64,6 +66,8 @@ import type {
 } from '../../types/handler-context.js';
 import { ServerError } from '../../types/errors.js';
 import { newId } from '../id.js';
+import { persistedToCore } from '../selection/encoding.js';
+import { SelectionStore } from '../selection/store.js';
 import { buildCommand, type Command } from '../undo-redo/command.js';
 
 type Input = z.infer<typeof paintStrokesTool.inputSchema>;
@@ -156,13 +160,21 @@ interface HandlerDeps {
   readonly assets: PaintStrokeAssetStore;
   /** Optional codec override; defaults to raw-RGBA only. */
   readonly codec?: PixelCodec;
+  /**
+   * Optional selection store. When provided, the handler captures a
+   * `SelectionClip` snapshot at op-begin (selection-tools FR-34/FR-39) and
+   * routes per-pixel clipping through the brush compositor. When omitted,
+   * the legacy bbox-only selection clip remains in effect (back-compat for
+   * hosts that have not yet wired the selection store into paint_strokes).
+   */
+  readonly selectionStore?: SelectionStore;
 }
 
 export function createPaintStrokesHandler(
   deps: HandlerDeps,
 ): ToolHandler<typeof paintStrokesTool.inputSchema, typeof paintStrokesTool.outputSchema> {
   const codec = deps.codec ?? defaultRawRgbaCodec;
-  const { db, assets } = deps;
+  const { db, assets, selectionStore } = deps;
 
   return async (input: Input, ctx: HandlerContext): Promise<Output> => {
     const layer = db
@@ -226,10 +238,27 @@ export function createPaintStrokesHandler(
         height: doc.h,
       });
 
-      // Selection bbox clip — minimal v1 implementation, see header comment.
+      // Selection bbox clip — fast pre-filter that drops stamps fully outside
+      // the selection bbox before per-pixel work. The (FR-34/FR-39) per-pixel
+      // clip below is the authoritative gate — bbox is only an optimisation.
       const selectionBbox = !input.ignore_selection
         ? readSelectionBbox(db, document_id)
         : null;
+
+      // FR-34/FR-37/FR-39 — capture a SelectionClip snapshot at op-begin.
+      // The clip is held immutable for the lifetime of this `apply` call so
+      // selection mutations during the in-flight write do not affect any
+      // stroke in this batch. Mask-kind selections require an async pre-fetch
+      // of the mask blob bytes; rect/lasso/none are computed inline.
+      const clip = await captureClipForApply({
+        db,
+        assets,
+        selectionStore,
+        document_id,
+        ignoreSelection: input.ignore_selection ?? false,
+        width: doc.w,
+        height: doc.h,
+      });
 
       let unionBbox: { x: number; y: number; w: number; h: number } | null = null;
 
@@ -258,6 +287,7 @@ export function createPaintStrokesHandler(
         raster = composeStrokeIntoRaster(raster, scaleStampOpacity(filtered, colorOpacity), {
           ...(layer.kind === 'mask' ? { maskOnly: true } : {}),
           color,
+          ...(clip ? { clip } : {}),
         });
 
         const strokeBbox = stampsBoundingBox(filtered);
@@ -354,6 +384,53 @@ async function loadLayerRaster(args: LoadRasterArgs): Promise<{
     return blank;
   }
   return decoded;
+}
+
+/**
+ * Capture a {@link SelectionClip} snapshot for the current `apply`.
+ *
+ * Returns `null` when no selection store is wired (legacy host) OR when
+ * `ignore_selection` is set OR when the active selection is empty/none.
+ * Mask-kind selections trigger an async pre-fetch of the referenced blob;
+ * rect/lasso/none are computed inline.
+ *
+ * Holding the captured clip immutable for the lifetime of `apply` is what
+ * gives us FR-39 (mid-stroke selection-change protection) without locks:
+ * the `editorStore`'s mutation only affects subsequent ops.
+ */
+async function captureClipForApply(args: {
+  db: DB;
+  assets: PaintStrokeAssetStore;
+  selectionStore: SelectionStore | undefined;
+  document_id: string;
+  ignoreSelection: boolean;
+  width: number;
+  height: number;
+}): Promise<SelectionClip | null> {
+  if (args.ignoreSelection) return null;
+  if (!args.selectionStore) return null;
+  const persisted = args.selectionStore.getOrNone(args.document_id);
+  if (persisted.kind === 'none') return null;
+  const core = persistedToCore(persisted);
+  const dims = { width: args.width, height: args.height };
+  // For mask-kind, pre-fetch the referenced blob bytes; for rect/lasso/none
+  // captureSelectionClip does not invoke the resolver.
+  let resolved: Uint8Array | undefined;
+  if (core.kind === 'mask') {
+    // The encoding maps `layer_id` to the mask blob id verbatim.
+    const blobId = core.layer_id as unknown as string;
+    const blob = await args.assets.read(blobId);
+    if (blob) {
+      // Mask blobs are a flat single-channel Uint8Array sized to (w*h);
+      // copy out of the Buffer so the consumer never holds a Node buffer.
+      resolved = new Uint8Array(blob.bytes.byteLength);
+      resolved.set(blob.bytes);
+    }
+  }
+  const clip = captureSelectionClip(core, dims, () => resolved);
+  // captureSelectionClip collapses empty masks to `kind: "none"`; pass
+  // through that result so the compositor takes the zero-overhead path.
+  return clip;
 }
 
 /** Read the document's selection bounding box, if any. */

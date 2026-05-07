@@ -1,13 +1,19 @@
 # selection-tools — Requirements
 
-> **Status:** Draft v0.1.
+> **Status:** Draft v0.2 (extends v0.1 with §3.8 Edit scoping + §3.9 Tap-to-deselect).
 > **Tier 2-elevated.** Selection is **important** in DiffuseCraft — primary mechanism for AI gating + collage clipping + targeted edits. Touch-first design, with AI-assisted selection as a secondary layer (figure-ground detection + prompt-based).
 > **Depends on:** `canvas-fundamentals` (selection state on document), `mask-system` (selection ↔ mask), `undo-redo-system`, `mcp-tool-catalog` (`set_selection` already polymorphic).
 > **References:** P22 (touch-first), P27 (reversibility), editor philosophy (collage + AI gating).
+> **Cross-cutting impact:** §3.8 affects every spec that performs raster writes (`brush-system`, `brush-canvas-rendering`, `mask-system`, `transform-tools`, `generation-workflow`, `image-io` paste path). §3.9 affects gesture composition in `editor-canvas-integration`.
 
 ## 1. Purpose
 
-Selection is **the** primary spatial-scoping mechanism in DiffuseCraft: it controls where AI generation is constrained, where edits apply, where masks come from. This spec defines:
+Selection is **the** primary spatial-scoping mechanism in DiffuseCraft: it controls where AI generation is constrained, where edits apply, where masks come from. Two cross-cutting invariants govern its semantics (formalized in §3.8 and §3.9):
+
+- **Selection-as-clip.** When a non-empty selection exists, every raster-write operation — brush stroke, fill, transform commit, paste, AI inpaint composition, refine — SHALL be confined to the selection mask. Pixels outside the selection are protected and remain bit-identical. The whole-canvas state (`kind: "none"`) is the absence of clipping; it is observationally equivalent to a full-canvas selection.
+- **Tap-to-deselect.** While a Tier 1 selection tool (rect, lasso, polygonal-lasso) is active in `Replace` mode, a tap (no drag) on the canvas clears the active selection. Magic wand, auto-select, and polygonal-lasso during construction interpret tap as their tool-native action and are exempt.
+
+This spec defines:
 
 - **Tier 1 (P0, basic, touch-first)**: rectangle, lasso, polygonal lasso, magic wand, refine edge, boolean ops (add/subtract/intersect).
 - **Tier 2 (P0–P1, fast AI on server)**: **MobileSAM** (9 MB, ~50–100 ms GPU) via ComfyUI for instantaneous figure-ground / subject detection on tap. General-purpose, promptable (point/box → mask). Default Tier 2 model in v1. **SAM 2 tiny** (38 MB) available as alternative configuration when its tooling matures further.
@@ -179,6 +185,40 @@ This spec adds 4 new tools:
 
 **FR-33 (Ubiquitous).** AI prompt-select with warm model: ≤ **2 s**; cold-start ≤ 5 s. Same UX progression.
 
+### 3.8 Edit scoping (selection-as-clip)
+
+This section formalizes the **selection-as-clip** invariant introduced in §1: an active selection constrains *where writes land*, not *which tool is active*. FR-28 (the protected-region overlay) is the visual manifestation of these rules; this section defines the behavior the overlay represents.
+
+**FR-34 (Ubiquitous).** While the active selection is non-empty (`kind ≠ "none"` and the rasterized mask has at least one non-zero pixel), the system SHALL clip every raster-write operation to the selection mask. Pixels outside the selection SHALL remain bit-identical before and after the operation. This applies to (non-exhaustive): brush strokes (paint, erase, smudge), bucket and gradient fill, transform commit when a transformed layer is rasterized into the document, paste, layer-pixel refine ops, and AI ops that mutate a layer's pixels (inpaint, outpaint result composition, prompt-based fill).
+
+**FR-35 (If).** If a non-write tool (eyedropper, hand/pan, zoom, view rotate, layer reorder, selection itself, transform-in-progress preview before commit) is invoked while a selection is active, then the system SHALL NOT apply the selection clip to that tool. Selection only constrains pixel writes; navigation, sampling, and structural ops are unaffected.
+
+**FR-36 (When).** When the user invokes `select_all` followed by any raster-write op, the system SHALL produce results bit-identical to performing that op with `kind: "none"`. The two states (no selection, full-canvas selection) SHALL be observationally equivalent for write scoping. This guarantees `select_all` is a safe explicit form of "no clip".
+
+**FR-37 (Where).** Where a selection has soft edges — feathered, blurred, anti-aliased lasso boundary, or AI-derived mask with sub-pixel alpha — the system SHALL apply per-pixel alpha multiplication to the writes. A pixel at mask alpha `a ∈ [0,1]` receives `a × write_effect`; halos, hard cutoffs at sub-pixel boundaries, and double-application across sub-strokes are forbidden.
+
+**FR-38 (Ubiquitous).** The selection-as-clip rule (FR-34) SHALL be a cross-cutting invariant: every spec that introduces a raster-write operation SHALL observe FR-34 without exception or opt-out. The user MUST be able to verify the rule by activating any selection and confirming that any write-producing tool leaves outside-selection pixels bit-identical.
+
+**FR-39 (When).** When the active selection changes (set, refined, inverted, cleared, or replaced) during an in-progress write — for example, mid-stroke or while a fill preview is awaiting commit — the change SHALL NOT take effect on the in-progress write. The selection observed by an operation is the one active at operation-begin; subsequent operations observe the updated selection. This prevents user-visible races where a stroke partially escapes its starting clip.
+
+### 3.9 Tap-to-deselect gesture
+
+This section formalizes the **tap-to-deselect** invariant introduced in §1. Definitions: a *tap* is a single-pointer gesture with translation < 4 pt and total duration < 250 ms between pointer-down and pointer-up. A *drag* is any single-pointer gesture not meeting that definition.
+
+**FR-40 (When).** When a Tier 1 area-selection tool (`rect`, `lasso`, `polygonal-lasso` after polygon close) is active in `Replace` boolean mode and the user performs a tap on the canvas (per the definition above), the system SHALL clear the active selection (`setSelection({ kind: "none" })`).
+
+**FR-41 (If).** If a tap occurs while the boolean mode is `Add`, `Subtract`, or `Intersect`, then the system SHALL treat the tap as a no-op (no deselect, no new selection contribution). This prevents accidental loss of compound selections under construction.
+
+**FR-42 (When).** When the active tool is `magic wand`, every tap SHALL be interpreted as a magic-wand sampling tap (FR-6). The deselect gesture from FR-40 SHALL NOT fire for magic wand, in any boolean mode.
+
+**FR-43 (When).** When the active tool is `auto-select` (Tier 2, FR-20), every tap SHALL be interpreted as a segmentation prompt (`auto_select_subject({ tap_point })`). The deselect gesture from FR-40 SHALL NOT fire for auto-select, in any boolean mode.
+
+**FR-44 (While).** While the polygonal-lasso tool is mid-construction (one or more vertices placed, polygon not yet closed), a tap SHALL add a vertex per FR-5. The deselect gesture from FR-40 SHALL NOT fire while in this state. Once the polygon closes and becomes the active selection, subsequent taps are governed by FR-40.
+
+**FR-45 (Ubiquitous).** The tap thresholds (4 pt translation, 250 ms duration) SHALL be implementation constants stable enough that a deliberately quick lasso starting touch is not misclassified as a tap. The 4 pt threshold matches iOS HIG tap recognition; the 250 ms upper bound rejects long-press and slow drags.
+
+**FR-46 (When).** When the user clears a selection via tap-to-deselect (FR-40), the operation SHALL be reversible via the undo stack with the same semantics as `clear_selection` (FR-12). The undo entry SHALL be labeled "Deselect" so the user can identify it in the history panel.
+
 ## 4. Non-functional requirements
 
 **NFR-1 (Ubiquitous).** Touch hit zones for selection tool buttons: ≥ 44×44 pt.
@@ -232,6 +272,26 @@ A selection is a per-session state.
 The user might have wand-selected on layer A, then switched to layer B.
 
 **Recommendation:** **selection persists**, even when active layer changes. Selection is a document-level state, not layer-level.
+
+### Q8 — Tap-to-deselect thresholds (FR-45)
+Are 4 pt translation and 250 ms duration the right cut-off between "tap" and "drag-start"?
+
+**Recommendation:** **yes for v1.** 4 pt matches iOS HIG tap recognition; 250 ms rejects long-press and slow drags. Revisit if telemetry from real users shows lasso starts being misclassified as taps (would manifest as accidental deselects when starting a new lasso). If revisited, the asymmetric option of "tap = ANY pointer-up before any movement of meaningful magnitude" is the safer relaxation.
+
+### Q9 — Tap-to-deselect during boolean compound (FR-41): no-op vs deselect-all?
+While in `Add` / `Subtract` / `Intersect`, the user has clearly opted into compounding. A tap could mean (a) "abandon and start over" (deselect-all) or (b) "I missed the canvas, ignore" (no-op).
+
+**Recommendation:** **no-op (FR-41).** Compound selections are expensive to rebuild; an accidental deselect mid-compound is the worse failure mode. Users wanting to abandon can switch back to `Replace` and tap, or use the explicit "Clear selection" tool.
+
+### Q10 — Selection-aware writes for the AI job pipeline (FR-34 applied to inpaint/outpaint)
+Inpaint already takes a mask input; the protected-region semantics are native to it. But what about generation results being **composed back** into the layer — does that composition step also get clipped by the user's active selection (in addition to the inpaint mask)?
+
+**Recommendation:** **yes** — selection clip applies after the inpaint mask. Composed equation: `final_alpha = inpaint_mask × selection_mask`. This means a user can constrain even an unmasked generation result to a sub-region by setting a selection before triggering generation. This is consistent with the §1 framing of selection as the **primary** spatial-scoping mechanism.
+
+### Q11 — Should there be a visible "tap-to-deselect" hint?
+First-time users may not discover the gesture.
+
+**Recommendation:** **first-run coachmark** when the user has held a selection > 30 s and has only used selection tools (no edits). One-time hint: "Tap empty canvas to clear selection." Out of v1 if it adds tablet-UX complexity; can ship as a follow-up via `screens-implementation`.
 
 ## 7. Acceptance criteria
 

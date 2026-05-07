@@ -644,9 +644,19 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
     // doesn't pull a PNG dependency at the server boundary. Hosts that
     // already ship a PNG codec (`apps/server`, MeshCraft) inject one via
     // `createPaintStrokesHandler({ codec })` once their bootstrap wires it.
+    //
+    // The handler also receives the SelectionStore so it can capture a
+    // SelectionClip snapshot at op-begin (selection-tools FR-34/FR-39) and
+    // route per-pixel clipping through the brush compositor. The same store
+    // is reused by all selection-tools handlers below.
+    const selectionStore = new SelectionStore(db);
     dispatcher.register(
       paintStrokesTool,
-      createPaintStrokesHandler({ db, assets }),
+      createPaintStrokesHandler({
+        db,
+        assets,
+        selectionStore,
+      }),
     );
 
     // 9-bis-4. Register selection-tools handlers. The Tier 1 handlers
@@ -656,7 +666,6 @@ class DiffuseCraftServerImpl implements DiffuseCraftServer {
     // sampling-not-supported stubs until comfyui-management wires
     // MobileSAM and the MCP-sampling forwarder into the segmentation
     // client (Phases C/D/E in selection-tools/tasks.md).
-    const selectionStore = new SelectionStore(db);
     dispatcher.register(
       setSelectionTool,
       // B.6 magic-wand server-side: pass `assets` so the handler can

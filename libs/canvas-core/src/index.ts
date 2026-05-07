@@ -48,6 +48,9 @@ export * from './transform/index';
 // ---- Mask system ----
 export * from './mask';
 
+// ---- Selection-as-clip primitive (selection-tools §3.8 / FR-34..FR-39) ----
+export * from './composite';
+
 // ---- Shared ----
 export * from './shared/ulid';
 export * from './shared/ids';

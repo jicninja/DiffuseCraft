@@ -25,6 +25,8 @@ export { drawSelectionOverlay } from './overlay/selection-overlay';
 export type { SelectionOverlayStyle } from './overlay/selection-overlay';
 export { SelectionOverlay } from './overlay/SelectionOverlay';
 export type { SelectionOverlayProps } from './overlay/SelectionOverlay';
+export { SelectionClipBoundary } from './clip/SelectionClipBoundary';
+export type { SelectionClipBoundaryProps } from './clip/SelectionClipBoundary';
 export { CanvasView } from './CanvasView';
 export type { CanvasViewProps } from './CanvasView';
 

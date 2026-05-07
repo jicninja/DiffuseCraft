@@ -79,6 +79,148 @@
 
 ---
 
+## Phase K — v0.2 extension: selection-as-clip + tap-to-deselect
+
+> **Scope:** retrofit FR-34..FR-46 (requirements §3.8 and §3.9, design §0/§11/§12). Tests-disabled per project rule; manual verification protocol per design §14.
+
+- [ ] 1. Foundation — shared selection-clip helper
+
+- [x] 1.1 Build the SelectionClip helper module
+  - Create the `composite/` module under canvas-core that owns the cross-cutting clip primitive shared by every raster-write call site.
+  - Expose a capture function that converts the active selection plus document dims into a frozen snapshot, collapsing empty masks to `kind: "none"` so the equivalence between `select_all` and the no-selection state holds for write scoping.
+  - Expose a sample function that returns a 0..1 alpha for any integer pixel, returning 1 when the snapshot is `none` and 0 for out-of-bounds coordinates.
+  - Re-export from canvas-core's barrel so server handlers and the Skia preview can both consume it.
+  - Observable completion: importing the helper from canvas-core works; capturing with `{kind: "none"}` plus any dims yields a snapshot whose sample function returns 1 for every pixel; capturing with a non-empty rect yields a snapshot whose sample is 0 outside the rect and 1 inside.
+  - _Requirements: FR-34, FR-36, FR-37, FR-39_
+  - _Boundary: canvas-core/composite_
+
+- [ ] 2. Core — server-side raster clip integration
+
+- [x] 2.1 Extend the brush stroke compositor with an optional clip parameter
+  - Thread the clip snapshot through `composeStrokeIntoRaster` as an additive option so existing call sites compile unchanged.
+  - In the per-pixel inner loop, multiply the stamp coverage by the clip sample before the existing alpha math; short-circuit when clip alpha is zero so outside-selection pixels remain bit-identical.
+  - Preserve all current modes (paint, erase, mask-only) under the clip; the clip multiplies coverage uniformly across modes.
+  - Observable completion: composing a stroke without the clip option produces output bit-identical to the pre-change version (regression check); composing with a non-empty clip leaves outside-clip pixels unchanged in the returned buffer.
+  - _Requirements: FR-34, FR-37_
+  - _Boundary: canvas-core/brush_
+  - _Depends: 1.1_
+
+- [x] 2.2 Wire the paint_strokes handler to capture the clip at op-begin
+  - At handler entry, capture the SelectionClip from the document's current selection and document dims (using the mask asset store as the resolver for mask-kind selections) before the per-stroke loop runs.
+  - Pass the captured clip into every `composeStrokeIntoRaster` invocation in the loop so all strokes in the batch share one frozen clip.
+  - Confirm that the reversible-command middleware's existing op-begin snapshot covers the clip lifetime; no additional locking required.
+  - Observable completion: a paint_strokes call against a layer with a rect selection updates only the in-rect pixels of the stored layer bytes; pixels outside the rect have identical SHA-256 before vs. after the call.
+  - _Requirements: FR-34, FR-39_
+  - _Boundary: server/handlers/paint-strokes_
+  - _Depends: 1.1, 2.1_
+
+- [ ] 2.3 (P) Wire the transform-tools commit handler to clip rasterized output
+  - _Blocked: transform-layer.ts stores decomposed transform_json; v1 has no rasterize/flatten step. Becomes actionable when a future "flatten transformed layer" or "bake transform" op lands. Re-evaluate after image-io paste lands (similar pattern)._
+  - At commit handler entry, capture the SelectionClip from the active selection.
+  - When rasterizing the transformed layer back into the base, clip the rasterized bytes through the snapshot so transform commits respect the active selection identically to brush strokes.
+  - Observable completion: committing a translation on a layer with a lasso selection leaves outside-lasso pixels of the underlying layer unchanged; the transformed content lands only where the lasso covered it.
+  - _Requirements: FR-34, FR-38_
+  - _Boundary: server/handlers/transform-commit_
+  - _Depends: 1.1_
+
+- [ ] 2.4 (P) Wire the image-io paste handler to clip pasted output
+  - _Blocked: image-io spec is in design phase (not yet implemented); no paste handler exists in libs/server/src/lib/handlers/. Re-open this task as part of image-io's own implementation phase, consuming the SelectionClip helper from K.1.1._
+  - At paste handler entry, capture the SelectionClip from the active selection.
+  - Clip the pasted bytes through the snapshot before merging into the target layer.
+  - Observable completion: pasting an image onto a layer with a rect selection results in the pasted image appearing only inside the rect; pixels outside the rect retain their pre-paste values.
+  - _Requirements: FR-34, FR-38_
+  - _Boundary: server/handlers/paste_
+  - _Depends: 1.1_
+
+- [ ] 2.5 (P) Wire the AI inpaint composition step to multiply the selection clip into the final mask
+  - _Blocked: generation-workflow's generate-image handlers create new layers from AI output rather than composing into existing-layer pixels in v1. No `composition.ts` write-into-layer path exists. Re-evaluate when an inpaint-into-existing-layer mode is added (likely upscale-and-tiling or a future "Fill" sub-mode)._
+  - In the generation-workflow composition path, capture the SelectionClip at the point where the inpaint result is composed into the layer.
+  - Multiply the selection clip into the inpaint mask (per pixel) before applying the source-over composite, so a user-set selection further narrows the inpaint write region.
+  - Observable completion: running an inpaint with a selection set produces a result whose written pixels are the intersection of the inpaint mask and the selection mask; pixels outside the intersection are unchanged.
+  - _Requirements: FR-34, FR-38_
+  - _Boundary: server/comfy/composition_
+  - _Depends: 1.1_
+
+- [ ] 3. Core — client preview clip
+
+- [x] 3.1 (P) Build the SelectionClipBoundary Skia wrapper
+  - Create the `clip/` module under canvas-skia exposing a declarative boundary component that wraps preview render trees and applies the active selection as a Skia clip.
+  - For rect and lasso selections, build a Skia path from the selection geometry and apply it as a clipPath on the wrapping group.
+  - For mask-kind selections, sample the alpha bytes into a Skia image and apply as a clipShader so soft edges produce visible alpha falloff (FR-37 visual parity with the server compositor).
+  - Confirm RN-Skia API signatures for the installed package version before commit (per the saved Skia version-aware-API memory).
+  - Observable completion: rendering a brush preview stroke inside the boundary with a non-empty selection results in the preview being visibly clipped to the selection; the marching-ants and protected-region overlays remain visible (they render outside the boundary).
+  - _Requirements: FR-34, FR-37_
+  - _Boundary: canvas-skia/clip_
+  - _Depends: 1.1_
+
+- [x] 3.2 Wrap CanvasView preview layers in SelectionClipBoundary
+  - In the editor's CanvasView, wrap the brush preview, transform preview, and paste preview render trees in the boundary so client-side previews match the server-side clip behavior.
+  - Keep marching-ants and protected-region overlays outside the boundary so they render in unclipped space.
+  - Observable completion: in the iPad simulator, drawing a brush stroke with a rect selection active shows the preview stroke clipped to the rect in real time, before commit.
+  - _Requirements: FR-34, FR-38_
+  - _Boundary: canvas-skia/CanvasView_
+  - _Depends: 3.1_
+
+- [ ] 4. Core — tap-to-deselect gesture
+
+- [x] 4.1 Add tap-deselect constants and gesture builder
+  - Add the tap thresholds (4 pt translation, 250 ms duration) as named constants near the top of the editor's tool gesture file so they are tunable from a single place.
+  - Build a gesture factory that returns a configured Gesture.Tap with those thresholds; on end, the factory reads the current boolean op from the editor store and clears the selection only when the op is `replace` and the current selection is non-empty.
+  - Use `.runOnJS(true)` consistent with existing tap usage in the same file (eyedropper) so the callback runs on the JS thread.
+  - Observable completion: the factory exists and is exported within the file; calling it returns a Gesture object with the configured thresholds; no consumer wiring yet.
+  - _Requirements: FR-40, FR-41, FR-45, FR-46_
+  - _Boundary: editor-gestures_
+
+- [x] 4.2 Compose tap-deselect with lasso and rect-select gestures
+  - Wrap the existing lasso and rect-select Pan gestures in `Gesture.Race(tapDeselect, pan)` so a clean tap deselects while a drag continues to draw the path/rect.
+  - Verify the existing short-path discard logic (lasso < 3 points; rect with zero area) still runs correctly under the Race; the discard happens inside the pan branch, not the tap branch.
+  - Observable completion: in the iPad simulator with the lasso tool active in Replace mode, a single tap on canvas clears any active selection; a drag still produces a lasso path. Same for rect-select.
+  - _Requirements: FR-40, FR-41, FR-46_
+  - _Boundary: editor-gestures_
+  - _Depends: 4.1_
+
+- [ ] 4.3 Rewrite the polygonal-lasso gesture as a state-aware tap
+  - _Blocked: `polygonal-lasso` is not a member of the mobile `EditorTool` union (libs/core/src/stores/editor/types.ts:55) — no UI surface, no gesture builder exists. Re-open when `screens-implementation` (or a follow-up selection-tools UI task) adds the tool to the EditorTool union and the LeftToolRail._
+  - Replace the polygonal-lasso gesture with a single state-machine Tap whose end branch consults `verticesRef.length` and the polygon-closed flag.
+  - When zero vertices and selection is empty: place first vertex.
+  - When zero vertices and selection is non-empty (closed polygon already committed): apply tap-to-deselect from FR-40.
+  - When ≥1 vertex: tap on first vertex closes the polygon and commits the selection; tap elsewhere adds a vertex per FR-5.
+  - Observable completion: in the iPad simulator with polygonal-lasso active, tapping in sequence builds a polygon, tapping the first vertex closes it into a selection, then tapping empty canvas clears the selection.
+  - _Requirements: FR-44, FR-40, FR-5_
+  - _Boundary: editor-gestures_
+  - _Depends: 4.1_
+
+- [ ] 4.4 Verify magic-wand and auto-select gestures remain tap-native (no wrap)
+  - _Blocked: `magic-wand` and `auto-select` are not members of the mobile `EditorTool` union (libs/core/src/stores/editor/types.ts:55) — no gesture builders exist to audit. Re-open when these tools are added to the mobile UI; the audit-only task is then a one-line code comment in each builder._
+  - Audit the magic-wand and auto-select gesture builders to confirm they are NOT wrapped in `Gesture.Race(tapDeselect, ...)`; their tap MUST continue to mean their tool-native action.
+  - Add a one-line code comment at each builder declaring the FR-42/FR-43 exemption so future contributors know not to add a tap-deselect wrap.
+  - Observable completion: with magic-wand active and a selection in place, tapping a colored pixel on the active layer produces a NEW selection by tolerance (does not deselect). With auto-select active and a selection in place, tapping a subject runs `auto_select_subject({tap_point})` (does not deselect).
+  - _Requirements: FR-42, FR-43_
+  - _Boundary: editor-gestures_
+
+- [ ] 5. Integration and verification
+
+- [ ] 5.1 Verify the Deselect undo label in the selection slice
+  - _Blocked: client-side selection-slice (libs/core/src/stores/editor/selection-slice.ts) has no undo mechanism — `setSelection` is a plain Zustand `set`. Server-side undo for selection state requires routing the gesture through an MCP `set_selection({kind: "none"})` call (reversible-command middleware). Re-open as a `client-state-architecture` integration task when MCP-driven mutations land for selection state on the mobile client._
+  - Inspect the selection slice's `setSelection` reducer to confirm that a transition from a non-empty selection to `{kind: "none"}` triggered by the gesture path emits an undo entry labeled "Deselect" distinct from the explicit "Clear selection" toolbar action.
+  - If the label is missing or collides, add a path that distinguishes gesture-driven from button-driven clears.
+  - Observable completion: triggering tap-to-deselect from a lasso selection produces an undo entry labeled "Deselect" in the history panel; pressing Undo restores the previous selection exactly (rect, lasso, or mask).
+  - _Requirements: FR-46_
+  - _Boundary: core/stores/editor/selection-slice_
+  - _Depends: 4.2, 4.3_
+
+- [ ] 5.2 Run the manual verification protocol from design §14 on real hardware
+  - _Blocked: requires physical iPad + Apple Pencil (or simulator with stylus emulation) and a paired server. Re-open after K.1..K.4 land and the user has hardware available; appended to research.md once executed._
+  - Execute the 12-row manual checklist in design §14 against the iPad simulator with Apple Pencil emulation, exercising every new FR (FR-34..FR-46) plus the cross-spec invariant (FR-38) and Q10 (AI clip).
+  - Capture screenshots or short videos for each row demonstrating the observable check.
+  - Append the completed checklist with timestamps and outcomes to research.md under a new section "v0.2 manual verification log".
+  - Observable completion: research.md contains the 12-row table with a PASS/FAIL outcome for each row; any FAIL items have a linked follow-up task or a documented decision to defer.
+  - _Requirements: FR-34, FR-35, FR-36, FR-37, FR-38, FR-39, FR-40, FR-41, FR-42, FR-43, FR-44, FR-45, FR-46_
+  - _Boundary: editor + canvas-core + server (verification only)_
+  - _Depends: 2.2, 2.3, 2.4, 2.5, 3.2, 4.2, 4.3, 4.4, 5.1_
+
+---
+
 ## Dependency order
 
 ```
@@ -87,9 +229,22 @@ A → B (Tier 1 server) → F (catalog)
                → C (Tier 2 MobileSAM) → D (Tier 3) → E (Tier 4 sampling)
                                                           \
                                                            → G (renderer) → H (tablet UX) → I (perf) → J (docs)
+
+K.1 (clip helper) ─┬─► K.2 (compositor) ─► K.2.2 (paint_strokes wire-up)
+                   ├─► K.2.3 (transform commit)              ┐
+                   ├─► K.2.4 (paste)                         ├─► K.5.2 (manual verification)
+                   ├─► K.2.5 (AI composition)                │
+                   └─► K.3.1 (Skia clip) ─► K.3.2 (CanvasView wrap)
+                                                              │
+K.4.1 (tap builder) ─┬─► K.4.2 (lasso/rect Race)              │
+                     └─► K.4.3 (polygonal state machine)      │
+K.4.4 (magic-wand/auto-select audit) ─────────────────────────┤
+K.5.1 (undo label verify) ────────────────────────────────────┘
 ```
 
 A is foundational. B/C/D/E are server. F is documentation/cap update. G/H are tablet. Tier 4 (E) can land in v0.2 if MCP sampling integration isn't ready.
+
+K is the v0.2 extension (selection-as-clip + tap-to-deselect). K.1 is foundational to all of K.2.* and K.3.*. K.2.3/K.2.4/K.2.5 and K.3.1 are parallel-safe after K.1. K.4.2/K.4.3 depend on K.4.1; K.4.4 is independent (audit-only). K.5.2 is the final verification gate.
 
 ## Risks and mitigations
 
@@ -113,3 +268,10 @@ Approved when:
 4. Risks acceptable.
 
 After approval, implementation begins with Phase A.
+
+### v0.2 extension (Phase K) approval
+
+Approved when (in addition to v0.1 criteria above):
+5. FR-34..FR-46 each map to ≥1 task in Phase K (verified in §15 Acceptance criteria of design.md).
+6. Cross-spec invariant FR-38 enforced via tasks K.2.3/K.2.4/K.2.5 (transform/paste/AI consume the shared clip helper from K.1).
+7. Manual verification protocol in design §14 has a corresponding task (K.5.2).
